@@ -531,7 +531,8 @@ async function scanForStatus() {
       ? '<tr><th></th><th>Type</th><th>Namespace / name</th><th>Version</th><th>Status</th><th>Pods</th></tr>' +
         RELEASES.map((r, i) => `<tr>
           <td><input type="radio" name="srel" value="${i}" style="width:auto"></td>
-          <td>${r.kind}${r.topology && r.topology !== 'standalone' ? ' <span class="dim">/ ' + r.topology + '</span>' : ''}</td>
+          <td>${r.kind}${r.cr_kind ? ' <span class="dim">/ ' + r.cr_kind + '</span>'
+            : (r.topology && r.topology !== 'standalone' ? ' <span class="dim">/ ' + r.topology + '</span>' : '')}</td>
           <td class="mono">${r.namespace}/<strong>${r.name}</strong></td>
           <td class="mono" style="font-size:11px">${r.version || '-'}</td>
           <td class="${r.deleting ? 'err' : 'ok'}">${r.deleting ? 'Terminating' : r.status}</td>
@@ -760,7 +761,12 @@ function renderPlan() {
   const pvc = $('uPvc').checked, ns = $('uNs').checked;
 
   let steps;
-  if (r.kind === 'enterprise') {
+  if (r.kind === 'opstree') {
+    steps = [
+      [r.cr_kind || 'Custom resource', `${r.name} — the operator then removes the StatefulSet, Services and PDB it created`, true],
+      ['Secret / ConfigMap / NetworkPolicy', "objects carrying this app's label", true],
+    ];
+  } else if (r.kind === 'enterprise') {
     steps = [
       ['RedisEnterpriseDatabase', r.databases.length
         ? r.databases.map(d => d.name).join(', ') : 'all in the namespace', true],
@@ -835,6 +841,7 @@ $('uGo').onclick = async () => {
     method: 'POST',
     body: JSON.stringify({
       kind: r.kind, namespace: r.namespace, name: r.name,
+      cr_plural: r.cr_plural || null,
       workload: r.workload || 'deployment', managed: !!r.managed,
       delete_pvc: pvc, delete_namespace: ns,
     }),
@@ -1433,6 +1440,7 @@ $('tRun').onclick = async () => {
     method: 'POST',
     body: JSON.stringify({
       kind: TTARGET.kind, namespace: TTARGET.namespace, name: TTARGET.name,
+      topology: TTARGET.topology || null,
       tests, client_namespace: $('tClientNs').value.trim() || null,
       confirm_disruptive: disruptive.length > 0,
     }),
@@ -1713,7 +1721,8 @@ window.runAnalysis = async (i) => {
   const r = RELEASES[i];
   const j = await api('/api/analyze', {
     method: 'POST',
-    body: JSON.stringify({ kind: r.kind, namespace: r.namespace, name: r.name, tests: [] }),
+    body: JSON.stringify({ kind: r.kind, namespace: r.namespace, name: r.name,
+                           topology: r.topology || null, tests: [] }),
   });
   document.querySelector('.tab[data-tab="deploy"]').click();
   streamJob(j.job_id, (status, result) => {

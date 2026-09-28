@@ -16,6 +16,14 @@ from typing import Any
 
 from . import ocp
 
+OPSTREE_GROUP = "redis.redis.opstreelabs.in"
+OPSTREE_KINDS = {                      # CRD plural -> (kind, topology)
+    "redis": ("Redis", "standalone"),
+    "redisreplications": ("RedisReplication", "replication"),
+    "redissentinels": ("RedisSentinel", "sentinel"),
+    "redisclusters": ("RedisCluster", "cluster"),
+}
+
 MANAGED_LABEL = "app.kubernetes.io/managed-by"
 MANAGED_VALUE = "redis-deployer"
 _SKIP_NS = re.compile(r"^(openshift|kube)-")
@@ -130,6 +138,55 @@ def discover(kubeconfig: str) -> dict[str, Any]:
             "deleting": bool(md.get("deletionTimestamp")) or ns_phase.get(ns) == "Terminating",
         })
 
+    # ---------------- Opstree operator ----------------
+    # Report the CUSTOM RESOURCE, not the StatefulSet it generates. The
+    # operator names a Sentinel's StatefulSet "<cr>-sentinel", so scanning
+    # workloads reports a release name that no CR answers to -- and the test
+    # suite then cannot resolve its topology, primary or port.
+    opstree_owned: set[tuple[str, str]] = set()
+    for plural, (kind_name, topo) in OPSTREE_KINDS.items():
+        for item in _json(kubeconfig, ["get", plural, "-A"], 60).get("items", []):
+            md, spec = item["metadata"], item.get("spec", {})
+            ns = md["namespace"]
+            enterprise_ns.add(ns)      # keep the community scan out of here
+            size = spec.get("clusterSize") or 1
+            expected = size * 2 if topo == "cluster" else size
+            pods = [p for p in _json(kubeconfig, ["get", "pods", "-n", ns], 60)
+                    .get("items", [])
+                    if (p["metadata"].get("labels") or {}).get("role")
+                    == ("sentinel" if topo == "sentinel" else
+                        "replication" if topo == "replication" else None)]
+            ready = sum(1 for p in pods
+                        if all(c.get("ready") for c in
+                               (p.get("status", {}).get("containerStatuses") or [])))
+            image = ((spec.get("kubernetesConfig") or {}).get("image")) or ""
+            detail = f"{kind_name}, clusterSize {size}"
+            if topo == "sentinel":
+                sc = spec.get("redisSentinelConfig") or {}
+                detail += (f", watches {sc.get('redisReplicationName', '?')}"
+                           f" (quorum {sc.get('quorum', '?')})")
+            releases.append({
+                "kind": "opstree",
+                "namespace": ns,
+                "name": md["name"],
+                # a namespace can hold a RedisReplication AND a RedisSentinel
+                # under the SAME name, so the kind is part of the identity
+                "cr_kind": kind_name,
+                "cr_plural": plural,
+                "topology": topo,
+                "version": image,
+                "status": f"{ready}/{expected} ready" if pods else "no pods",
+                "detail": detail,
+                "databases": [],
+                "pods": len(pods),
+                "pvcs": pvcs_by_ns.get(ns, []),
+                "managed": (md.get("labels", {}) or {}).get(MANAGED_LABEL) == MANAGED_VALUE,
+                "ns_phase": ns_phase.get(ns, ""),
+                "deleting": bool(md.get("deletionTimestamp"))
+                            or ns_phase.get(ns) == "Terminating",
+            })
+            opstree_owned.add((ns, md["name"]))
+
     # ---------------- Community ----------------
     for kind in ("deployment", "statefulset"):
         for item in _json(kubeconfig, ["get", kind, "-A"]).get("items", []):
@@ -137,8 +194,9 @@ def discover(kubeconfig: str) -> dict[str, Any]:
             ns, name = md["namespace"], md["name"]
             if ns in enterprise_ns:
                 continue                                    # operator-owned
-            if any(o.get("kind") == "RedisEnterpriseCluster"
-                   for o in md.get("ownerReferences", [])):
+            owners = {o.get("kind") for o in md.get("ownerReferences", [])}
+            if owners & {"RedisEnterpriseCluster", "Redis", "RedisReplication",
+                         "RedisSentinel", "RedisCluster"}:
                 continue
 
             labels = md.get("labels", {}) or {}

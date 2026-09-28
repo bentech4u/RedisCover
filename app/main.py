@@ -345,7 +345,8 @@ def run_tests(spec: TestRunSpec, sid: Optional[str] = Cookie(None)):
 
 def _run_suite(job, kubeconfig: str, spec: TestRunSpec):
     result = redistests.run_suite(job, kubeconfig, spec.kind, spec.namespace,
-                                  spec.name, spec.tests, spec.client_namespace or "")
+                                  spec.name, spec.tests, spec.client_namespace or "",
+                                  topology=spec.topology or "")
     job.result.update(result)
     if result.get("failed"):
         raise RuntimeError(f"{result['counts']['fail']} test(s) failed")
@@ -363,7 +364,7 @@ def _analyze(job, kubeconfig: str, spec: TestRunSpec):
     job.log(f"Analyzing keyspace of {spec.namespace}/{spec.name}")
     job.step(1, 2, "Locating a pod to read from")
     t = redistests.resolve_target(kubeconfig, spec.kind, spec.namespace, spec.name,
-                                  log=job.log)
+                                  log=job.log, topology=spec.topology or "")
     pod = t.primary or (t.pods[0] if t.pods else "")
     if not pod:
         raise RuntimeError("no running pod found")

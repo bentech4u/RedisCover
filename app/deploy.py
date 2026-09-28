@@ -519,7 +519,21 @@ def uninstall(job: Job, kubeconfig: str, spec: UninstallSpec) -> None:
     job.log(f"  PersistentVolumeClaims: {'YES -- DATA IS DESTROYED' if spec.delete_pvc else 'no (kept)'}")
     job.log(f"  namespace             : {'YES -- EVERYTHING IN IT' if spec.delete_namespace else 'no (kept)'}")
 
-    if spec.kind == "enterprise":
+    if spec.kind == "opstree":
+        job.step(1, 3, "Deleting the custom resource")
+        plural = spec.cr_plural or "redisreplications"
+        ocp.run(kubeconfig, ["delete", plural, spec.name, "-n", ns,
+                             "--ignore-not-found"],
+                check=False, timeout=300, log=job.log)
+        job.log("  the operator removes the StatefulSet, Services and PDB it created")
+        job.step(2, 3, "Removing objects this app created")
+        for kind in ("secret", "configmap", "networkpolicy"):
+            ocp.run(kubeconfig, ["delete", kind, "-n", ns, "-l",
+                                 "app.kubernetes.io/managed-by=redis-deployer",
+                                 "--ignore-not-found"],
+                    check=False, timeout=180, log=job.log)
+        step = 3
+    elif spec.kind == "enterprise":
         job.step(1, 4, "Deleting databases")
         ocp.run(kubeconfig, ["delete", "redb", "--all", "-n", ns, "--ignore-not-found"],
                 check=False, timeout=300, log=job.log)

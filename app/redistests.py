@@ -42,6 +42,8 @@ class Target:
     workload: str = "deployment"
     sentinel_host: str = ""
     sentinel_port: int = 26379
+    master_group: str = "myMaster"
+    watches: str = ""
     allowed_ns: list[str] = field(default_factory=list)
 
 
@@ -53,13 +55,17 @@ def _secret_value(kubeconfig: str, ns: str, name: str, key: str) -> str:
 
 
 def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
-                   log=None) -> Target:
+                   log=None, topology: str = "") -> Target:
     t = Target(kind=kind, namespace=namespace, name=name)
+    if topology:
+        # the caller already knows which CR this is; probing would find the
+        # wrong one when a Replication and a Sentinel share a name
+        t.topology = topology
 
     # Ask the API which custom resource exists, rather than reading a label off
     # whatever `oc get all` happens to return first. An operator-managed release
     # has both a RedisReplication and a RedisSentinel under the same name.
-    if kind == "opstree":
+    if kind == "opstree" and not topology:
         for crd, topo, port in (("redissentinel", "sentinel", 26379),
                                 ("rediscluster", "cluster", 6379),
                                 ("redisreplication", "replication", 6379),
@@ -68,7 +74,7 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
                        check=False, timeout=30).returncode == 0:
                 t.topology, t.port = topo, port
                 break
-    else:
+    elif not topology:
         t.topology = ocp.jsonpath(
             kubeconfig, ["get", "all", "-n", namespace, "-l", f"app={name}"],
             "{.items[0].metadata.labels.redis-deployer/topology}") or "standalone"
@@ -92,12 +98,19 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
                 break
         domain = ocp.cluster_domain(kubeconfig, namespace)
         if t.topology == "sentinel":
-            # Sentinel is a control plane, not a data endpoint: it answers
+            # Sentinel is a control plane, not a data endpoint. It answers
             # SENTINEL commands on 26379 and never serves keys. The data
-            # endpoint is whichever pod it currently considers the primary.
+            # endpoint is whichever node it currently calls the primary --
+            # which is the whole point, so we ask it rather than guess.
             t.sentinel_host = f"{name}-sentinel.{namespace}.svc.{domain}"
-            t.host = f"{name}.{namespace}.svc.{domain}"
-            t.port = 6379
+            t.sentinel_port = 26379
+            t.master_group = ocp.jsonpath(
+                kubeconfig, ["get", "redissentinel", name, "-n", namespace],
+                "{.spec.redisSentinelConfig.masterGroupName}") or "myMaster"
+            t.watches = ocp.jsonpath(
+                kubeconfig, ["get", "redissentinel", name, "-n", namespace],
+                "{.spec.redisSentinelConfig.redisReplicationName}") or ""
+            t.host, t.port = _ask_sentinel(kubeconfig, t, log)
         else:
             t.host = f"{name}.{namespace}.svc.{domain}"
         if t.topology == "replication":
@@ -119,8 +132,9 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
                     check=False, timeout=45)
         t.pods = sorted(l.strip() for l in (p.stdout or "").splitlines() if l.strip())
 
-    # who is the primary, asked rather than assumed
-    for pod in t.pods:
+    # who is the primary, asked rather than assumed. Sentinel pods run
+    # redis-sentinel and have no data role, so probing them is meaningless.
+    for pod in ([] if t.topology == "sentinel" else t.pods):
         role = _role_of(kubeconfig, namespace, pod, t.password)
         if role == "master":
             t.primary = t.primary or pod
@@ -133,6 +147,28 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
         "{.namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name}{\" \"}{end}")
     t.allowed_ns = [x for x in pol.split() if x]
     return t
+
+
+def _ask_sentinel(kubeconfig: str, t: Target, log=None) -> tuple[str, int]:
+    """Ask a Sentinel which node is currently the primary.
+
+    This is the only correct way to find a Sentinel-managed primary: after a
+    failover it is a different pod, and any hardcoded host is wrong.
+    """
+    for pod in t.pods or []:
+        p = ocp.run(kubeconfig, ["exec", "-n", t.namespace, pod, "--", "redis-cli",
+                                 "-p", str(t.sentinel_port),
+                                 "SENTINEL", "get-master-addr-by-name", t.master_group],
+                    check=False, timeout=45)
+        lines = [l.strip() for l in (p.stdout or "").splitlines() if l.strip()]
+        if len(lines) >= 2 and lines[1].isdigit():
+            if log:
+                log(f"  sentinel reports the primary is {lines[0]}:{lines[1]}")
+            return lines[0], int(lines[1])
+    if log:
+        log("  sentinel could not name a primary -- it may still be discovering, "
+            "or it is not monitoring anything")
+    return "", 6379
 
 
 def _role_of(kubeconfig: str, ns: str, pod: str, password: str) -> str:
@@ -425,6 +461,57 @@ def t_readonly(ctx) -> Result:
                   f"{pod} ACCEPTED a write -- it will diverge from the primary: {out[:90]}")
 
 
+@test("sentinel", "Sentinel is monitoring a primary", 1, topologies=["sentinel"],
+      describe="Asks Sentinel who the primary is, how many replicas and other "
+               "sentinels it sees, and whether quorum can actually be reached.")
+def t_sentinel(ctx) -> Result:
+    t = ctx.target
+    if not t.pods:
+        return Result("sentinel", "Sentinel is monitoring a primary", "skip", "no pods")
+    pod = t.pods[0]
+
+    def sent(*args):
+        p = ocp.run(ctx.kubeconfig, ["exec", "-n", t.namespace, pod, "--", "redis-cli",
+                                     "-p", str(t.sentinel_port), "SENTINEL", *args],
+                    check=False, timeout=45)
+        return (p.stdout or "") + (p.stderr or "")
+
+    masters = sent("masters")
+    if "Connection refused" in masters:
+        return Result("sentinel", "Sentinel is monitoring a primary", "fail",
+                      f"nothing is listening on {t.sentinel_port} in {pod}. The pod is "
+                      "probably running the plain redis image instead of redis-sentinel.")
+    if not masters.strip():
+        return Result("sentinel", "Sentinel is monitoring a primary", "fail",
+                      f"SENTINEL masters returned nothing -- it is not monitoring "
+                      f"'{t.watches or 'anything'}'")
+
+    addr = sent("get-master-addr-by-name", t.master_group).split()
+    info = {}
+    lines = [l.strip() for l in masters.splitlines() if l.strip()]
+    for k, v in zip(lines[::2], lines[1::2]):
+        info[k] = v
+    slaves = info.get("num-slaves", "?")
+    sentinels = info.get("num-other-sentinels", "?")
+    quorum = info.get("quorum", "?")
+    flags = info.get("flags", "?")
+
+    detail = (f"group '{t.master_group}' primary={':'.join(addr[:2]) if len(addr) >= 2 else '?'} "
+              f"flags={flags} replicas={slaves} other-sentinels={sentinels} quorum={quorum}")
+    if "o_down" in flags or "s_down" in flags:
+        return Result("sentinel", "Sentinel is monitoring a primary", "fail",
+                      detail + " -- the primary is marked DOWN")
+    try:
+        if int(sentinels) + 1 < int(quorum):
+            return Result("sentinel", "Sentinel is monitoring a primary", "fail",
+                          detail + f" -- only {int(sentinels)+1} sentinel(s) can vote but "
+                          f"quorum is {quorum}; a failover could never be agreed")
+    except ValueError:
+        pass
+    return Result("sentinel", "Sentinel is monitoring a primary", "pass", detail,
+                  {"replicas": slaves, "sentinels": sentinels, "quorum": quorum})
+
+
 @test("cluster", "Cluster state and slot coverage", 1, topologies=["cluster"],
       describe="CLUSTER INFO state, and that all 16384 hash slots are assigned.")
 def t_cluster(ctx) -> Result:
@@ -705,10 +792,13 @@ class Ctx:
 
 
 def run_suite(job, kubeconfig: str, kind: str, namespace: str, name: str,
-              test_ids: list[str], client_ns: str = "") -> dict:
-    job.log(f"Testing {kind} release {namespace}/{name}")
+              test_ids: list[str], client_ns: str = "",
+              topology: str = "") -> dict:
+    job.log(f"Testing {kind} release {namespace}/{name}"
+            + (f" ({topology})" if topology else ""))
     job.step(1, 4, "Resolving the target")
-    t = resolve_target(kubeconfig, kind, namespace, name, log=job.log)
+    t = resolve_target(kubeconfig, kind, namespace, name, log=job.log,
+                       topology=topology)
     job.log(f"  topology : {t.topology}")
     job.log(f"  endpoint : {t.host}:{t.port}")
     job.log(f"  pods     : {', '.join(t.pods) or 'none'}")

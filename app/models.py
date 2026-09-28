@@ -93,7 +93,8 @@ class EnterpriseSpec(BaseModel):
 
 
 class UninstallSpec(BaseModel):
-    kind: Literal["community", "enterprise"]
+    kind: Literal["community", "opstree", "enterprise"]
+    cr_plural: Optional[str] = None     # opstree: which CR to delete
     namespace: str
     name: str = "redis"
     workload: Literal["deployment", "statefulset"] = "deployment"
@@ -157,6 +158,8 @@ class TestRunSpec(BaseModel):
     kind: Literal["community", "opstree", "enterprise"]
     namespace: str
     name: str
-    tests: list[str]
+    # Opstree releases are identified by CR kind as well as name
+    topology: Optional[str] = None
+    tests: list[str] = []
     client_namespace: Optional[str] = None
     confirm_disruptive: bool = False
