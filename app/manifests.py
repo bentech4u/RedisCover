@@ -234,7 +234,8 @@ def _community_standalone(spec: CommunitySpec, password: str) -> list[dict]:
 def network_policy(ns: str, pod_labels: dict, port: int,
                    allow_ns: list[str], name: str, *,
                    peer_ports: list[int] | None = None,
-                   allow_peers: bool = True) -> dict:
+                   allow_peers: bool = True,
+                   operator_namespaces: list[str] | None = None) -> dict:
     """Allow ingress on `port` from the listed namespaces, plus peer traffic.
 
     Two things this has to get right, both of which fail silently:
@@ -250,6 +251,11 @@ def network_policy(ns: str, pod_labels: dict, port: int,
        replication, Sentinel's monitoring and the Redis Cluster bus, because
        the Redis pods are not in a client namespace. `allow_peers` adds a
        bare podSelector rule, which means "pods in THIS namespace matching".
+
+    3. An OPERATOR-managed release needs the operator itself allowed in. It
+       dials the pods directly to read their role and decide who is primary.
+       Lock it out and it reports "no master pods found" and never configures
+       replication -- while every pod looks healthy.
     """
     ingress: list[dict] = []
 
@@ -261,11 +267,20 @@ def network_policy(ns: str, pod_labels: dict, port: int,
             "ports": [{"protocol": "TCP", "port": port}],
         })
 
+    ports = [{"protocol": "TCP", "port": p} for p in
+             sorted({port, *(peer_ports or [])})]
+
     if allow_peers:
-        ports = [{"protocol": "TCP", "port": p} for p in
-                 sorted({port, *(peer_ports or [])})]
         ingress.append({
             "from": [{"podSelector": {"matchLabels": pod_labels}}],
+            "ports": ports,
+        })
+
+    if operator_namespaces:
+        ingress.append({
+            "from": [{"namespaceSelector": {
+                "matchLabels": {"kubernetes.io/metadata.name": n}}}
+                for n in operator_namespaces],
             "ports": ports,
         })
 

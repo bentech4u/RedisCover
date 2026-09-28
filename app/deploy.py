@@ -421,7 +421,8 @@ def deploy_enterprise(job: Job, kubeconfig: str, spec: EnterpriseSpec) -> None:
         job.log("Applying NetworkPolicy (verify the podSelector matches your rec-* pods)")
         ocp.apply_yaml(kubeconfig, dump([network_policy(
             spec.namespace, pod_labels, int(port), spec.allow_namespaces,
-            f"allow-clients-to-{spec.db_name}")]), log=job.log)
+            f"allow-clients-to-{spec.db_name}",
+            operator_namespaces=[spec.namespace])]), log=job.log)
 
     # the operator publishes the real FQDN in status; trust it over anything
     # we could construct, and fall back to the discovered cluster domain
@@ -890,9 +891,12 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
         objs.append(network_policy(spec.namespace, {"app": spec.name}, 6379,
                                    spec.allow_namespaces,
                                    f"allow-clients-to-{spec.name}",
-                                   peer_ports=peer_ports))
+                                   peer_ports=peer_ports,
+                                   operator_namespaces=[spec.operator_namespace]))
         job.log(f"  NetworkPolicy: clients from {', '.join(spec.allow_namespaces)}"
-                f" + peer traffic between the pods themselves")
+                f", peer traffic between the pods, and the operator in "
+                f"'{spec.operator_namespace}' -- which dials the pods directly to "
+                "decide who is primary")
     job.result["manifests"] = dump(objs)
     try:
         apply_manifests(job, kubeconfig, objs)
