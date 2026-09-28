@@ -44,15 +44,6 @@ typing the release name to confirm.
 | **Status** | Live `INFO` from a running pod, plus pods, services, storage, policies and events. |
 | **Uninstall** | Discovers what is installed and shows a per-object deletion plan before touching anything. |
 
-### Screenshots
-
-| | |
-|---|---|
-| ![Deploy](docs/screenshots/03-deploy.png) | ![Sizing](docs/screenshots/04-sizing.png) |
-| Three products, described honestly | Sizing that shows its working |
-| ![Test](docs/screenshots/05-test.png) | ![Status](docs/screenshots/07-status.png) |
-| Failure drills with expected outcomes | Live `INFO`, not `oc get` output |
-
 ---
 
 ## Quick start
