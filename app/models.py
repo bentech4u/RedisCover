@@ -118,7 +118,7 @@ class OpstreeSpec(BaseModel):
     name: str = Field(default="redis", pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 
     topology: Literal["standalone", "replication", "sentinel", "cluster"] = "standalone"
-    version_id: str = "v7.4"
+    version_id: str = "v8.2"
     custom_image: Optional[str] = None
 
     size: int = 3                       # replicas / sentinels / leader shards
@@ -145,6 +145,8 @@ class OpstreeSpec(BaseModel):
     memory_limit: str = "512Mi"
 
     install_operator: bool = True       # install it first if it is not there
+    # the v0.15.1 bundle is missing RBAC for two of its own controllers
+    fix_operator_rbac: bool = True
     operator_namespace: str = "openshift-operators"
     operator_channel: str = "stable"
 

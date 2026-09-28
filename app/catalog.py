@@ -158,10 +158,15 @@ OPSTREE_TOPOLOGIES = [
 ]
 
 OPSTREE_VERSIONS = [
-    {"id": "v7.4", "label": "Redis 7.4", "image": "quay.io/opstree/redis:v7.4.0"},
+    # Verified against quay.io/opstree/redis. Opstree does NOT publish a tag for
+    # every upstream Redis release, so these are real tags, not guesses -- an
+    # invented tag gives you ImagePullBackOff with "manifest unknown".
+    {"id": "v8.8", "label": "Redis 8.8", "image": "quay.io/opstree/redis:v8.8.2"},
+    {"id": "v8.6", "label": "Redis 8.6", "image": "quay.io/opstree/redis:v8.6.6"},
+    {"id": "v8.2", "label": "Redis 8.2", "image": "quay.io/opstree/redis:v8.2.9"},
     {"id": "v7.2", "label": "Redis 7.2", "image": "quay.io/opstree/redis:v7.2.3"},
     {"id": "v7.0", "label": "Redis 7.0", "image": "quay.io/opstree/redis:v7.0.12"},
-    {"id": "v6.2", "label": "Redis 6.2", "image": "quay.io/opstree/redis:v6.2.14"},
+    {"id": "v6.2", "label": "Redis 6.2 (legacy)", "image": "quay.io/opstree/redis:v6.2.14"},
 ]
 
 

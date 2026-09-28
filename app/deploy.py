@@ -726,7 +726,7 @@ def _wait_pods_ready(job: Job, kubeconfig: str, ns: str, expected: int,
 
 def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
     topo = opstree_topology(spec.topology) or {}
-    total = 6
+    total = 7
     password = spec.password or gen_password()
 
     job.log(f"Redis via the Opstree operator -- topology: {topo.get('label')}")
@@ -802,6 +802,50 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
         else:
             raise TimeoutError(f"CRD {crd} never appeared after installing the operator")
         job.log(f"  {crd} registered")
+
+    job.step(3, total, "Checking the operator is actually healthy")
+    plural = {"Redis": "redis", "RedisReplication": "redisreplications",
+              "RedisSentinel": "redissentinels", "RedisCluster": "redisclusters"}[topo["kind"]]
+    if not ot.operator_can_watch(kubeconfig, spec.operator_namespace, plural):
+        job.log(f"  the operator's ServiceAccount CANNOT list {plural}")
+        job.log("  This is a packaging bug in the community bundle: its CSV grants RBAC")
+        job.log("  for only two of the four controllers it ships. controller-runtime aborts")
+        job.log("  the whole manager when any cache fails to sync, so the operator")
+        job.log("  crash-loops and no topology works.")
+        if not spec.fix_operator_rbac:
+            raise RuntimeError(
+                f"The operator cannot watch {plural}: its CSV is missing the RBAC. "
+                "Enable 'repair operator RBAC' or grant it manually.")
+        job.log("")
+        job.log("  applying a supplementary ClusterRole for the missing resources")
+        apply_manifests(job, kubeconfig,
+                        ot.rbac_supplement(spec.operator_namespace),
+                        dry_run_first=False)
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if ot.operator_can_watch(kubeconfig, spec.operator_namespace, plural):
+                break
+            time.sleep(5)
+        else:
+            raise RuntimeError(f"RBAC applied but the SA still cannot list {plural}")
+        job.log(f"  the SA can now list {plural}")
+        job.log("  restarting the operator so it picks up the new permissions")
+        ocp.run(kubeconfig, ["rollout", "restart", "deployment/redis-operator",
+                             "-n", spec.operator_namespace],
+                check=False, timeout=90, log=job.log)
+    else:
+        job.log(f"  the operator can watch {plural}")
+
+    job.log("  waiting for the operator deployment to report available")
+    try:
+        ocp.run(kubeconfig, ["rollout", "status", "deployment/redis-operator",
+                             "-n", spec.operator_namespace, "--timeout=300s"],
+                timeout=330, log=job.log)
+    except Exception:
+        job.log("")
+        job.log("The operator is not becoming ready. Its own logs will say why:")
+        job.log(f"  oc logs -n {spec.operator_namespace} deployment/redis-operator --tail=40")
+        raise
 
     job.step(3, total, "Checking the CR against the installed CRD schema")
     schema = ot.crd_fields(kubeconfig, topo["kind"])

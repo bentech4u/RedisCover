@@ -174,3 +174,52 @@ def crd_fields(kubeconfig: str, kind: str) -> dict[str, Any]:
         "served_versions": [v["name"] for v in served],
         "spec_fields": sorted(props.keys()),
     }
+
+
+# ---------------------------------------------------------------- RBAC repair
+
+# The v0.15.1 bundle ships four controllers (Redis, RedisReplication,
+# RedisSentinel, RedisCluster) but its ClusterServiceVersion only grants RBAC
+# for `redis` and `redisclusters` -- `redisreplications`, `redissentinels` and
+# core `events` are missing. controller-runtime aborts the whole manager when
+# any controller's cache fails to sync, so the operator crash-loops and NO
+# topology works. This supplements the missing rules.
+MISSING_RESOURCES = [
+    "redisreplications", "redisreplications/status", "redisreplications/finalizers",
+    "redissentinels", "redissentinels/status", "redissentinels/finalizers",
+]
+
+
+def rbac_supplement(sa_namespace: str, sa_name: str = "redis-operator") -> list[dict]:
+    name = "rediscover-opstree-rbac-supplement"
+    return [
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+            "metadata": {"name": name, "labels": {
+                "app.kubernetes.io/managed-by": "redis-deployer"}},
+            "rules": [
+                {"apiGroups": [OPSTREE_GROUP], "resources": MISSING_RESOURCES,
+                 "verbs": ["create", "delete", "get", "list", "patch", "update", "watch"]},
+                {"apiGroups": [""], "resources": ["events"],
+                 "verbs": ["create", "patch"]},
+            ],
+        },
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding",
+            "metadata": {"name": name, "labels": {
+                "app.kubernetes.io/managed-by": "redis-deployer"}},
+            "roleRef": {"apiGroup": "rbac.authorization.k8s.io",
+                        "kind": "ClusterRole", "name": name},
+            "subjects": [{"kind": "ServiceAccount", "name": sa_name,
+                          "namespace": sa_namespace}],
+        },
+    ]
+
+
+def operator_can_watch(kubeconfig: str, sa_namespace: str, resource: str,
+                       sa_name: str = "redis-operator") -> bool:
+    sa = f"system:serviceaccount:{sa_namespace}:{sa_name}"
+    p = ocp.run(kubeconfig,
+                ["auth", "can-i", "list", f"{resource}.{OPSTREE_GROUP}",
+                 "--as", sa, "-A"], check=False, timeout=45)
+    return (p.stdout or "").strip() == "yes"

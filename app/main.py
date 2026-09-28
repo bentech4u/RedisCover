@@ -234,6 +234,18 @@ def versions_enterprise(sid: Optional[str] = Cookie(None)):
             if "redis" not in name.lower():
                 continue
             st = item.get("status", {})
+            # Only packages that actually provide RedisEnterpriseCluster belong on
+            # this form. The Opstree community operator matches "redis" by name but
+            # provides Redis/RedisReplication/RedisSentinel/RedisCluster -- picking
+            # it here would generate CRs it cannot reconcile.
+            kinds = {
+                crd.get("kind")
+                for ch in st.get("channels", [])
+                for crd in (((ch.get("currentCSVDesc") or {})
+                             .get("customresourcedefinitions") or {}).get("owned") or [])
+            }
+            if "RedisEnterpriseCluster" not in kinds:
+                continue
             packages.append({
                 "name": name,
                 "catalog": st.get("catalogSource"),
