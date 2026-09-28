@@ -291,3 +291,35 @@ def cluster_domain(kubeconfig: str, namespace: str = "", pod: str = "",
         log(f"  cluster DNS domain: {domain}{job_note}")
     _DOMAIN_CACHE[kubeconfig] = domain
     return domain
+
+
+def schedulable_nodes(kubeconfig: str) -> list[dict]:
+    """Nodes a normal workload can actually land on.
+
+    The `node-role.kubernetes.io/worker` label is not enough: OpenShift infra
+    nodes usually carry that label AND a NoSchedule/NoExecute taint, so counting
+    by label alone over-reports capacity. A pre-flight that says "6 nodes
+    available" when 3 are tainted lets a deployment through that then sits
+    Pending forever.
+    """
+    import json as _json
+    p = run(kubeconfig, ["get", "nodes", "-o", "json"], check=False, timeout=90)
+    if p.returncode != 0:
+        return []
+    out = []
+    for item in _json.loads(p.stdout).get("items", []):
+        taints = item["spec"].get("taints") or []
+        blocking = [t for t in taints
+                    if t.get("effect") in ("NoSchedule", "NoExecute")]
+        if blocking:
+            continue
+        labels = item["metadata"].get("labels", {}) or {}
+        alloc = item["status"].get("allocatable", {})
+        out.append({
+            "name": item["metadata"]["name"],
+            "roles": [k.split("/", 1)[1] for k in labels
+                      if k.startswith("node-role.kubernetes.io/")],
+            "cpu": alloc.get("cpu"),
+            "memory": alloc.get("memory"),
+        })
+    return out

@@ -443,18 +443,19 @@ def deploy_enterprise(job: Job, kubeconfig: str, spec: EnterpriseSpec) -> None:
 
 
 def _preflight_enterprise(job: Job, kubeconfig: str, spec: EnterpriseSpec) -> None:
-    p = ocp.run(kubeconfig,
-                ["get", "nodes", "-l", "node-role.kubernetes.io/worker=",
-                 "-o", "custom-columns=NAME:.metadata.name,CPU:.status.allocatable.cpu,"
-                       "MEM:.status.allocatable.memory"],
-                check=False, log=job.log)
-    schedulable = max(0, len((p.stdout or "").strip().splitlines()) - 1)
+    nodes = ocp.schedulable_nodes(kubeconfig)
+    for n in nodes:
+        job.log(f"    {n['name']:36s} {','.join(n['roles']) or '-':16s} "
+                f"cpu={n['cpu']} mem={n['memory']}")
+    schedulable = len(nodes)
     if schedulable < spec.nodes:
         raise RuntimeError(
-            f"{spec.nodes} cluster nodes requested but only {schedulable} worker nodes found. "
-            "Redis Enterprise uses REQUIRED pod anti-affinity: one pod per node, so extra "
-            "replicas stay Pending forever.")
-    job.log(f"  {schedulable} worker nodes available for {spec.nodes} REC nodes")
+            f"{spec.nodes} cluster nodes requested but only {schedulable} node(s) are "
+            "SCHEDULABLE. Nodes carrying a NoSchedule/NoExecute taint -- OpenShift infra "
+            "nodes usually do, despite also having the worker role label -- cannot take "
+            "these pods. Redis Enterprise uses REQUIRED pod anti-affinity: one pod per "
+            "node, so the extras would stay Pending forever.")
+    job.log(f"  {schedulable} schedulable node(s) for {spec.nodes} REC nodes")
 
     if spec.storage_class:
         prov = ocp.jsonpath(kubeconfig, ["get", "sc", spec.storage_class], "{.provisioner}")
@@ -739,10 +740,16 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
     job.step(1, total, "Pre-flight")
     pods_wanted = {"standalone": 1, "replication": spec.size,
                    "sentinel": spec.size, "cluster": spec.size * 2}[spec.topology]
-    p = ocp.run(kubeconfig, ["get", "nodes", "-l", "node-role.kubernetes.io/worker=",
-                             "--no-headers"], check=False, log=job.log)
-    workers = len([l for l in (p.stdout or "").splitlines() if l.strip()])
-    job.log(f"  topology needs ~{pods_wanted} pod(s); {workers} worker nodes available")
+    nodes = ocp.schedulable_nodes(kubeconfig)
+    workers = len(nodes)
+    for n in nodes:
+        job.log(f"    {n['name']:36s} {','.join(n['roles']) or '-':16s} "
+                f"cpu={n['cpu']} mem={n['memory']}")
+    job.log(f"  topology needs ~{pods_wanted} pod(s); "
+            f"{workers} SCHEDULABLE node(s) (tainted nodes excluded)")
+    if spec.topology in ("replication", "sentinel", "cluster") and workers < min(pods_wanted, 3):
+        job.log(f"  WARNING: only {workers} schedulable node(s). Operators spread pods with "
+                "anti-affinity, so some may stay Pending.")
     if spec.topology == "cluster" and spec.size < 3:
         raise RuntimeError("Redis Cluster needs at least 3 leader shards")
     if spec.topology == "sentinel" and spec.size % 2 == 0:
