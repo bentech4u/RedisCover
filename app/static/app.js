@@ -1,15 +1,57 @@
 const $ = (id) => document.getElementById(id);
+// A failed call used to reject with nothing listening, so a dead session made
+// every button look broken. Surface it instead.
+function showError(msg, kind = 'e') {
+  let el = document.getElementById('globalErr');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'globalErr';
+    el.style.cssText = 'position:fixed;top:64px;right:20px;max-width:440px;z-index:200';
+    document.body.appendChild(el);
+  }
+  el.className = 'alert ' + kind;
+  el.innerHTML = `<b style="float:right;cursor:pointer;margin-left:10px">&times;</b>${msg}`;
+  el.querySelector('b').onclick = () => el.remove();
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.remove(), 15000);
+}
+
 const api = async (path, opts = {}) => {
-  const r = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
+  let r;
+  try {
+    r = await fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+  } catch (netErr) {
+    showError(`Cannot reach the server — is it still running? (${netErr.message})`);
+    throw netErr;
+  }
   const txt = await r.text();
   let body; try { body = JSON.parse(txt); } catch { body = { detail: txt }; }
-  if (!r.ok) throw new Error(body.detail || r.statusText);
+
+  if (r.status === 401) {
+    // sessions are in memory, so restarting the app logs everyone out
+    showError('Session expired — the server was restarted. Log in again.', 'w');
+    document.getElementById('panelMain').classList.add('hide');
+    document.getElementById('panelLogin').classList.remove('hide');
+    document.getElementById('whoami').classList.add('hide');
+    document.getElementById('btnLogout').classList.add('hide');
+    throw new Error('Not logged in');
+  }
+  if (!r.ok) {
+    showError(typeof body.detail === 'string' ? body.detail : r.statusText);
+    throw new Error(body.detail || r.statusText);
+  }
   return body;
 };
+
+// last resort: nothing should fail silently
+window.addEventListener('unhandledrejection', (e) => {
+  const m = (e.reason && e.reason.message) || String(e.reason || '');
+  if (m && m !== 'Not logged in') showError(m);
+});
 
 let STATE = { kind: null, preflight: null, community: null, enterprise: null };
 

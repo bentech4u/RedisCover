@@ -748,6 +748,28 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
     if spec.topology == "sentinel" and spec.size % 2 == 0:
         job.log("  WARNING: an even number of sentinels cannot break a tie -- use an odd count")
 
+    if spec.topology == "sentinel":
+        # Sentinel holds no data: it watches an existing RedisReplication. Without
+        # one the CR is accepted and the pods start, then sit unable to find a
+        # primary -- a confusing half-working state. Refuse up front instead.
+        target = spec.replication_name or f"{spec.name}-replication"
+        p = ocp.run(kubeconfig,
+                    ["get", "redisreplication", target, "-n", spec.namespace],
+                    check=False, timeout=45)
+        if p.returncode != 0:
+            existing = ocp.run(kubeconfig,
+                               ["get", "redisreplication", "-n", spec.namespace,
+                                "-o", "jsonpath={range .items[*]}{.metadata.name}{\" \"}{end}"],
+                               check=False, timeout=45).stdout.strip()
+            raise RuntimeError(
+                f"Sentinel monitors an existing RedisReplication, and "
+                f"'{target}' does not exist in namespace '{spec.namespace}'. "
+                + (f"Found instead: {existing}. " if existing else
+                   "There are no RedisReplication resources in that namespace. ")
+                + "Deploy the 'Replication' topology first, then point Sentinel at it "
+                  "by name.")
+        job.log(f"  RedisReplication '{target}' found -- Sentinel has something to watch")
+
     job.step(2, total, "Ensuring the operator is installed")
     crd = f"{ {'Redis': 'redis', 'RedisReplication': 'redisreplications', 'RedisSentinel': 'redissentinels', 'RedisCluster': 'redisclusters'}[topo['kind']] }.{OPSTREE_GROUP}"
     have = ocp.run(kubeconfig, ["get", "crd", crd], check=False, timeout=45).returncode == 0
