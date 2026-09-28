@@ -163,6 +163,7 @@
         </div>
         <div class="field feat" data-feat="io_threads">
           <label>io-threads</label><input id="cIoThreads" type="number" min="1" max="8" placeholder="1">
+          <div class="hint">Network I/O only; command execution stays single-threaded.</div>
         </div>
       </div>
 
@@ -248,9 +249,15 @@
         </div>
         <div class="field"><label>Eviction policy</label><select id="otEviction"></select>
           <div class="hint">What happens at maxmemory.</div></div>
-        <div class="field"><label>Extra redis.conf directives</label>
-          <textarea id="otExtraConf" rows="2" placeholder="tcp-keepalive 300&#10;timeout 0"></textarea>
-          <div class="hint">Appended verbatim via the operator's additionalRedisConfig.</div></div>
+        <div class="field"><label>Extra redis.conf directives <span class="dim">(optional)</span></label>
+          <textarea id="otExtraConf" rows="3" placeholder="usually leave this empty"></textarea>
+          <div class="hint">Appended verbatim via the operator's <span class="mono">additionalRedisConfig</span>.
+            Do not set <span class="mono">maxmemory</span>, <span class="mono">requirepass</span>,
+            <span class="mono">bind</span>, <span class="mono">dir</span> or
+            <span class="mono">replicaof</span> here &mdash; the fields above and the operator manage those.
+            <a href="#" id="otPresetCache">insert cache tuning</a> &middot;
+            <a href="#" id="otPresetRepl">replication tuning</a> &middot;
+            <a href="#" id="otPresetClear">clear</a></div></div>
       </div>
 
       <div class="grid g3" style="margin-bottom:16px">

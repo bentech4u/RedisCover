@@ -1746,3 +1746,58 @@ function renderAnalysis(a) {
   renderSizing();
   $('zAnalysis').scrollIntoView({ behavior: 'smooth' });
 }
+
+
+/* ------------------------------------------------ redis.conf presets */
+
+// Only directives that are NOT already the Redis default, and that are
+// genuinely worth setting on Kubernetes. tcp-keepalive 300 and timeout 0 are
+// defaults already -- suggesting them would be noise.
+const CONF_PRESETS = {
+  cache: `# free memory in a background thread instead of blocking the event loop.
+# Default is "no" for all of these. Matters most when you have large keys:
+# deleting or evicting one synchronously stalls every other client.
+lazyfree-lazy-eviction yes
+lazyfree-lazy-expire yes
+lazyfree-lazy-server-del yes
+replica-lazy-flush yes
+
+# cap TOTAL client output buffers (Redis 7+, default unlimited). Without it a
+# single slow consumer doing a large MGET can balloon RSS and OOMKill the pod.
+maxmemory-clients 5%
+
+# CACHE ONLY. Default "yes" stops Redis accepting writes if a background save
+# fails -- a self-inflicted outage for data you can repopulate.
+# Leave the default for a datastore.
+stop-writes-on-bgsave-error no
+
+# diagnosis: keep more slow entries, and enable latency tracking (off by default)
+slowlog-max-len 256
+latency-monitor-threshold 100`,
+
+  replication: `# default is 1mb, which a busy primary overruns in seconds. A bigger backlog
+# lets a briefly disconnected replica do a PARTIAL resync instead of a full
+# RDB transfer.
+repl-backlog-size 64mb
+repl-backlog-ttl 3600
+
+# give replicas room before the primary drops them mid-sync
+client-output-buffer-limit replica 512mb 128mb 60
+
+# fail loudly rather than serving data known to be stale
+replica-serve-stale-data no`,
+};
+
+['otPresetCache', 'otPresetRepl', 'otPresetClear'].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.onclick = (e) => {
+    e.preventDefault();
+    const box = $('otExtraConf');
+    if (id === 'otPresetClear') { box.value = ''; return; }
+    const add = id === 'otPresetCache' ? CONF_PRESETS.cache : CONF_PRESETS.replication;
+    box.value = box.value.trim() ? box.value.trim() + '\n\n' + add : add;
+    box.style.height = 'auto';
+    box.style.height = Math.min(320, box.scrollHeight) + 'px';
+  };
+});
