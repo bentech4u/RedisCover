@@ -9,7 +9,7 @@ PORT="${DEPLOYER_PORT:-8800}"
 # A virtualenv hardcodes absolute paths in its shebangs, so moving or renaming
 # the checkout silently breaks it. Detect that and rebuild rather than failing
 # with an inscrutable "bad interpreter".
-if [[ -d .venv ]] && ! ./.venv/bin/python -c "import sys" >/dev/null 2>&1; then
+if [[ -d .venv ]] && ! ./.venv/bin/uvicorn --version >/dev/null 2>&1; then
   echo "==> Virtualenv is stale (the directory was moved). Rebuilding."
   rm -rf .venv
 fi

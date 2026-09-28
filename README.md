@@ -196,17 +196,6 @@ added because it went wrong in real use:
 
 ---
 
-## Documentation
-
-* [`docs/REDIS-ENTERPRISE-RUNBOOK.md`](docs/REDIS-ENTERPRISE-RUNBOOK.md) — a
-  production deployment runbook: pre-flight through handover, with day-2
-  operations, rollback and a troubleshooting table.
-* [`docs/LEARNING-NOTES.md`](docs/LEARNING-NOTES.md) — the OpenShift concepts
-  behind the tool: SCC versus Pod Security Admission, StatefulSet versus
-  Deployment, why a Route cannot carry Redis, PVC lifecycle, OLM.
-
----
-
 ## Layout
 
 ```
