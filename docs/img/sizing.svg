@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 350" width="900" height="350" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">
+<style>
+ .bg{fill:#0f1115} .panel{fill:#171a21;stroke:#2b313d} .box{fill:#1e222b;stroke:#2b313d}
+ .t{fill:#d7dce5;font-size:12.5px} .dim{fill:#8b94a6;font-size:11px} .h{fill:#d7dce5;font-size:14px;font-weight:600}
+ .acc{fill:#4f8cff;font-size:12.5px} .err{fill:#f85149;font-size:11px} .ok{fill:#3fb950;font-size:12.5px}
+</style>
+<rect class="bg" width="900" height="350"/>
+<text class="h" x="24" y="30">Why 1,000,000 keys of 544 bytes is not 519 MiB</text>
+<text class="dim" x="24" y="50">the sizing calculator shows every step, so the number is auditable</text>
+
+<rect class="box" x="24" y="70" width="150" height="46" rx="5"/>
+<text class="t" x="36" y="92">Raw data</text><text class="acc" x="36" y="108">519 MiB</text>
+<text class="dim" x="182" y="98">1M keys x 544 bytes</text>
+
+<rect class="box" x="24" y="124" width="150" height="46" rx="5"/>
+<text class="t" x="36" y="146">+ per-key overhead</text><text class="acc" x="36" y="162">611 MiB</text>
+<text class="dim" x="182" y="152">64B metadata + 32B expiry, per key</text>
+
+<rect class="box" x="24" y="178" width="150" height="46" rx="5"/>
+<text class="t" x="36" y="200">+ fragmentation</text><text class="acc" x="36" y="216">764 MiB</text>
+<text class="dim" x="182" y="206">x1.25 — jemalloc rounds to size classes</text>
+
+<rect class="box" x="24" y="232" width="150" height="46" rx="5" stroke="#4f8cff"/>
+<text class="t" x="36" y="254">+ growth headroom</text><text class="ok" x="36" y="270">1.12 GiB</text>
+<text class="dim" x="182" y="254">+50%  —  this is your maxmemory</text>
+<text class="dim" x="182" y="270">the RAM Redis may fill with data</text>
+
+<rect class="box" x="24" y="286" width="150" height="46" rx="5" stroke="#4f8cff"/>
+<text class="t" x="36" y="308">Container limit</text><text class="ok" x="36" y="324">1.79 GiB</text>
+<text class="dim" x="182" y="302">+ fork copy-on-write + client and replication buffers</text>
+<text class="dim" x="182" y="320">63% utilisation — inside the 50-70% safe band</text>
+
+<rect class="panel" x="560" y="70" width="316" height="262" rx="7"/>
+<text class="t" x="576" y="94">Measured, not guessed</text>
+<text class="dim" x="576" y="116">"Measure a running Redis" reads the live</text>
+<text class="dim" x="576" y="132">keyspace and fills the form in:</text>
+<text class="acc" x="576" y="158">keys           9,901  (81% with TTL)</text>
+<text class="acc" x="576" y="176">mean/key       1,634 B</text>
+<text class="acc" x="576" y="194">median/key       512 B</text>
+<text class="err" x="576" y="216">skew 3.2x — a few huge keys dominate</text>
+<text class="err" x="576" y="234">audit:bulk:dump is 4,194,304 bytes</text>
+<text class="dim" x="576" y="258">Redis is single-threaded: reading a</text>
+<text class="dim" x="576" y="274">multi-megabyte key stalls every other</text>
+<text class="dim" x="576" y="290">client for the duration.</text>
+<text class="dim" x="576" y="316">--bigkeys found it at 63% of the scan;</text>
+<text class="dim" x="576" y="324"> </text>
+</svg>

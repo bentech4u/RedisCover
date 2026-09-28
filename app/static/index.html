@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenShift Redis Deployer</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>OpenShift Redis Deployer</h1>
+  <span class="sp"></span>
+  <span id="whoami" class="badge hide"></span>
+  <button id="btnLogout" class="ghost hide" style="padding:5px 12px">Log out</button>
+</header>
+
+<main>
+<datalist id="nsList"></datalist>
+
+
+<!-- ============ LOGIN ============ -->
+<section id="panelLogin" class="card">
+  <h2>Connect to the cluster</h2>
+  <div class="sub">Runs <span class="mono">oc login</span> on this machine. The password is used once and never stored &mdash; only the resulting kubeconfig is kept, mode 0600, until you log out.</div>
+  <div id="loginErr" class="alert e hide"></div>
+  <div class="grid g2">
+    <div class="field" style="grid-column:1/-1">
+      <label>API server URL</label>
+      <input id="server" placeholder="https://api.cluster.example.com:6443">
+      <div class="hint">Auto-detected from this host's kubeconfig where possible.</div>
+    </div>
+    <div class="field"><label>Username</label><input id="username" value="kubeadmin" autocomplete="username"></div>
+    <div class="field"><label>Password</label><input id="password" type="password" autocomplete="current-password"></div>
+  </div>
+  <div class="row">
+    <label class="chk"><input type="checkbox" id="insecure" checked> Skip TLS verification</label>
+  </div>
+  <div class="row"><button id="btnLogin">Connect</button></div>
+</section>
+
+<!-- ============ MAIN ============ -->
+<div id="panelMain" class="hide">
+
+  <div class="tabs">
+    <div class="tab active" data-tab="deploy">Deploy</div>
+    <div class="tab" data-tab="cluster">Cluster</div>
+    <div class="tab" data-tab="sizing">Sizing</div>
+    <div class="tab" data-tab="operators">Operators</div>
+    <div class="tab" data-tab="tests">Test</div>
+    <div class="tab" data-tab="status">Status</div>
+    <div class="tab" data-tab="uninstall">Uninstall</div>
+  </div>
+
+  <!-- ---------- DEPLOY ---------- -->
+  <div id="tabDeploy">
+
+    <section class="card">
+      <h2>1 &nbsp;What are you deploying?</h2>
+      <div class="sub">Two very different products. Pick deliberately.</div>
+      <div class="choice">
+        <div class="opt" id="optCommunity" data-kind="community">
+          <h3>Redis Community (open source)</h3>
+          <p>A single <span class="mono">redis-server</span> process as a Deployment + PVC + Service. Free, ~15&nbsp;MB image, starts in seconds. No clustering, no automatic failover.</p>
+        </div>
+        <div class="opt" id="optOpstree" data-kind="opstree">
+          <h3>Redis via Opstree operator</h3>
+          <p>Open-source operator (community catalog). Four topologies: <strong>standalone, replication, Sentinel, cluster</strong>. Free, handles failover and bootstrap. Community-supported only.</p>
+        </div>
+        <div class="opt" id="optEnterprise" data-kind="enterprise">
+          <h3>Redis Enterprise (operator)</h3>
+          <p>A 3-node clustered platform via OLM. Automatic failover, sharding, management UI. <strong>Requires a licence</strong>, ~1.9&nbsp;GB image, needs 3 schedulable nodes.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- COMMUNITY FORM -->
+    <section id="formCommunity" class="card hide">
+      <h2>2 &nbsp;Version and configuration</h2>
+      <div class="sub">The version you pick decides which options below are available.</div>
+
+      <div class="grid g2" style="margin-bottom:16px">
+        <div class="field">
+          <label>Version</label>
+          <select id="cVersion"></select>
+          <div class="hint" id="cVersionNote"></div>
+        </div>
+        <div class="field">
+          <label>Custom image (optional &mdash; overrides the version)</label>
+          <input id="cCustomImage" placeholder="registry.example.com/redis:7.4-alpine">
+          <div class="hint">Use this for a mirrored or internal registry.</div>
+        </div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field">
+          <label>Topology</label>
+          <select id="cTopology">
+            <option value="standalone">Standalone &mdash; one pod (Deployment)</option>
+            <option value="replication">Replication &mdash; primary + replicas (StatefulSet)</option>
+          </select>
+          <div class="hint" id="cTopoHint"></div>
+        </div>
+        <div class="field hide" id="wrapCReplicas"><label>Pods (primary + replicas)</label>
+          <input id="cReplicas" type="number" value="3" min="2" max="9"></div>
+        <div class="field"><label>Namespace</label><input id="cNamespace" value="redis"></div>
+      </div>
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Release name</label><input id="cName" value="redis"></div>
+        <div class="field">
+          <label>Password</label>
+          <div style="display:flex;gap:6px">
+            <input id="cPassword" placeholder="leave blank to generate">
+            <button class="ghost" id="cGenPw" style="padding:8px 11px">Gen</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field">
+          <label>Persistence</label><select id="cPersistence"></select>
+          <div class="hint">AOF survives a crash with &le;1s loss. None = pure cache.</div>
+        </div>
+        <div class="field" id="wrapFsync">
+          <label>appendfsync</label>
+          <select id="cFsync">
+            <option value="everysec">everysec &mdash; flush once per second</option>
+            <option value="always">always &mdash; zero loss, much slower</option>
+            <option value="no">no &mdash; let the OS decide</option>
+          </select>
+        </div>
+        <div class="field" id="wrapStorage">
+          <label>Storage class</label><select id="cStorageClass"></select>
+          <div class="hint" id="cScHint"></div>
+          <label class="chk" style="margin-top:6px;font-size:11.5px"><input type="checkbox" id="cAllowFile"> allow file/NAS storage anyway</label>
+        </div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field" id="wrapSize"><label>Volume size</label><input id="cStorageSize" value="5Gi">
+          <div class="hint">Disk for the AOF/RDB files &mdash; <strong>not</strong> cache capacity.
+          Redis holds data in RAM (maxmemory). Rule of thumb: 3-5x maxmemory.</div></div>
+        <div class="field">
+          <label>maxmemory <span class="dim">(RAM &mdash; the real capacity)</span></label>
+          <input id="cMaxmemory" value="256mb">
+          <div class="hint" id="cMemHint">This is how much data Redis can hold. Keep it below the container memory limit, or the kernel OOM-kills Redis before it can evict.</div>
+        </div>
+        <div class="field"><label>Eviction policy</label><select id="cEviction"></select></div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>CPU request</label><input id="cCpuReq" value="100m"></div>
+        <div class="field"><label>CPU limit</label><input id="cCpuLim" value="500m"></div>
+        <div class="field"><label>Memory request</label><input id="cMemReq" value="128Mi"></div>
+      </div>
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Memory limit <span class="dim">(container ceiling)</span></label>
+          <input id="cMemLim" value="512Mi">
+          <div class="hint" id="cLimitHint"></div></div>
+        <div class="field feat" data-feat="maxmemory_clients">
+          <label>maxmemory-clients <span class="dim">(7.4+)</span></label>
+          <input id="cMaxClients" placeholder="e.g. 5%">
+        </div>
+        <div class="field feat" data-feat="io_threads">
+          <label>io-threads</label><input id="cIoThreads" type="number" min="1" max="8" placeholder="1">
+        </div>
+      </div>
+
+      <div class="grid g3">
+        <div class="field">
+          <label>Service type</label>
+          <select id="cServiceType">
+            <option value="ClusterIP">ClusterIP &mdash; in-cluster only</option>
+            <option value="NodePort">NodePort &mdash; reachable from outside the cluster</option>
+          </select>
+          <div class="hint">How clients reach <strong>Redis itself</strong> (port 6379). NodePort opens a
+          port on <em>every</em> node &mdash; keep the password and set a NetworkPolicy. Redis has no web UI;
+          this is not about a console.</div>
+        </div>
+        <div class="field hide" id="wrapNodePort">
+          <label>NodePort (30000-32767)</label><input id="cNodePort" type="number" placeholder="auto">
+        </div>
+        <div class="field">
+          <label>Restrict access to namespaces</label>
+          <div class="nspick" id="cAllowNs"></div>
+          <div class="hint">Nothing selected = no NetworkPolicy, and every pod on the cluster can reach Redis.</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="cPreview" class="ghost">Preview YAML</button>
+        <button id="cDeploy">Deploy</button>
+      </div>
+    </section>
+
+    <!-- OPSTREE FORM -->
+    <section id="formOpstree" class="card hide">
+      <h2>2 &nbsp;Topology and configuration</h2>
+      <div class="sub">The Opstree operator provides four topologies. Your choice decides the custom resource, the pod count and what your client has to support.</div>
+      <div id="otWarn"></div>
+
+      <div class="grid g2" style="margin-bottom:16px">
+        <div class="field">
+          <label>Topology</label><select id="otTopology"></select>
+          <div class="hint" id="otTopoHint"></div>
+        </div>
+        <div class="field">
+          <label>Redis version</label><select id="otVersion"></select>
+          <div class="hint" id="otVersionHint"></div>
+        </div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Namespace</label><input id="otNamespace" value="redis-ot"></div>
+        <div class="field"><label>Name</label><input id="otName" value="redis"></div>
+        <div class="field"><label id="otSizeLabel">Size</label>
+          <input id="otSize" type="number" value="3" min="1" max="9">
+          <div class="hint" id="otSizeHint"></div></div>
+      </div>
+
+      <div class="grid g3 hide" id="otSentinelFields" style="margin-bottom:16px">
+        <div class="field"><label>RedisReplication to monitor</label>
+          <input id="otReplName" placeholder="redis-replication">
+          <div class="hint">Must already exist &mdash; deploy the replication topology first.</div></div>
+        <div class="field"><label>Master group name</label><input id="otMasterGroup" value="myMaster"></div>
+        <div class="field"><label>Quorum</label><input id="otQuorum" type="number" value="2" min="1">
+          <div class="hint">Sentinels that must agree the primary is down.</div></div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Password</label>
+          <div style="display:flex;gap:6px">
+            <input id="otPassword" placeholder="leave blank to generate">
+            <button class="ghost" id="otGenPw" style="padding:8px 11px">Gen</button>
+          </div></div>
+        <div class="field"><label>Storage class</label><select id="otStorageClass"></select>
+          <div class="hint" id="otScHint"></div></div>
+        <div class="field"><label>Volume size per pod</label><input id="otStorageSize" value="5Gi"></div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field">
+          <label>maxmemory <span class="dim">(RAM &mdash; the cache capacity)</span></label>
+          <input id="otMaxmemory" value="256mb">
+          <div class="hint" id="otMemHint">How much data Redis can actually hold. Leave it blank
+          and Redis is unlimited &mdash; it grows until the container hits its memory limit and
+          the kernel OOM-kills it.</div>
+        </div>
+        <div class="field"><label>Eviction policy</label><select id="otEviction"></select>
+          <div class="hint">What happens at maxmemory.</div></div>
+        <div class="field"><label>Extra redis.conf directives</label>
+          <textarea id="otExtraConf" rows="2" placeholder="tcp-keepalive 300&#10;timeout 0"></textarea>
+          <div class="hint">Appended verbatim via the operator's additionalRedisConfig.</div></div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>CPU request</label><input id="otCpuReq" value="100m"></div>
+        <div class="field"><label>CPU limit</label><input id="otCpuLim" value="500m"></div>
+        <div class="field"><label>Memory request</label><input id="otMemReq" value="128Mi"></div>
+      </div>
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Memory limit <span class="dim">(container ceiling)</span></label>
+          <input id="otMemLim" value="512Mi">
+          <div class="hint" id="otLimitHint"></div></div>
+        <div class="field" style="display:flex;align-items:flex-end">
+          <label class="chk"><input type="checkbox" id="otInstallOp" checked> Install the operator if missing</label>
+        </div>
+        <div class="field"><label>Restrict access to namespaces</label>
+          <div class="nspick" id="otAllowNs"></div></div>
+      </div>
+
+      <div class="row">
+        <button id="otPreview" class="ghost">Preview YAML</button>
+        <button id="otDeploy">Deploy</button>
+      </div>
+    </section>
+
+    <!-- ENTERPRISE FORM -->
+    <section id="formEnterprise" class="card hide">
+      <h2>2 &nbsp;Operator, cluster and database</h2>
+      <div class="sub">Versions are read live from this cluster's catalog sources.</div>
+      <div id="entWarn"></div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Operator package</label><select id="ePackage"></select></div>
+        <div class="field"><label>Channel</label><select id="eChannel"></select></div>
+        <div class="field"><label>Version (CSV)</label><input id="eCsv" class="mono" readonly>
+          <div class="hint">Pinned, so you get exactly the version you tested.</div></div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Namespace</label><input id="eNamespace" value="redis-enterprise"></div>
+        <div class="field">
+          <label>Update approval</label>
+          <select id="eApproval">
+            <option value="Manual">Manual &mdash; recommended for databases</option>
+            <option value="Automatic">Automatic</option>
+          </select>
+          <div class="hint">Automatic lets a vendor release roll-restart your database unannounced.</div>
+        </div>
+        <div class="field"><label>Cluster name</label><input id="eRecName" value="rec"></div>
+      </div>
+
+      <div class="field" style="margin-bottom:16px">
+        <label>Licence file contents (optional)</label>
+        <textarea id="eLicense" rows="3" placeholder="Paste the licence text. Leave blank for TRIAL mode: 4 shards, 30 days."></textarea>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Cluster nodes</label><input id="eNodes" type="number" value="3" min="1" max="9">
+          <div class="hint" id="eNodesHint"></div></div>
+        <div class="field"><label>CPU per node</label><input id="eCpu" value="4">
+          <div class="hint">Redis production minimum is 4.</div></div>
+        <div class="field"><label>Memory per node</label><input id="eMemory" value="16Gi">
+          <div class="hint" id="eMemHint">Usable dataset ~ node memory minus 4-6&nbsp;Gi of overhead.</div></div>
+      </div>
+
+      <div class="grid g3" style="margin-bottom:16px">
+        <div class="field"><label>Storage class</label><select id="eStorageClass"></select>
+          <div class="hint" id="eScHint"></div></div>
+        <div class="field"><label>Volume size per node</label><input id="eVolumeSize" value="80Gi">
+          <div class="hint">Redis guidance: ~5x node memory.</div></div>
+        <div class="field"><label>Rack awareness label</label><select id="eRack">
+          <option value="">Disabled</option>
+          <option value="topology.kubernetes.io/zone">topology.kubernetes.io/zone</option>
+        </select><div class="hint" id="eRackHint"></div></div>
+      </div>
+
+      <div class="row" style="margin:0 0 6px">
+        <label class="chk"><input type="checkbox" id="eCreateDb" checked> Also create a database</label>
+      </div>
+      <div class="row" style="margin:0 0 14px">
+        <label class="chk"><input type="checkbox" id="eExposeUi"> Expose the management console via a Route</label>
+      </div>
+      <div class="hint" style="margin:-8px 0 14px">
+        The console is HTTPS, so a passthrough Route works &mdash; the browser sends TLS SNI for HAProxy to route on.
+        A Route can never carry Redis itself (RESP has no Host header and no SNI). Leave this off and reach it with
+        <span class="mono">oc port-forward</span> instead.
+      </div>
+
+      <div id="dbFields">
+        <div class="grid g3" style="margin-bottom:16px">
+          <div class="field"><label>Database name</label><input id="eDbName" value="redis-db"></div>
+          <div class="field"><label>Memory size</label><input id="eDbMemory" value="2GB">
+            <div class="hint" id="eDbMemHint"></div></div>
+          <div class="field"><label>Port</label><input id="eDbPort" type="number" value="12000">
+            <div class="hint">Pin it. An unpinned port changes if the DB is recreated.</div></div>
+        </div>
+        <div class="grid g3" style="margin-bottom:16px">
+          <div class="field"><label>Shards</label><input id="eShards" type="number" value="1" min="1"></div>
+          <div class="field"><label>Replication</label>
+            <select id="eReplication">
+              <option value="true">Enabled &mdash; master + replica, auto failover</option>
+              <option value="false">Disabled &mdash; no HA</option>
+            </select>
+            <div class="hint">Doubles the shard count against your licence.</div></div>
+          <div class="field"><label>Eviction policy</label><select id="eDbEviction"></select></div>
+        </div>
+        <div class="grid g3">
+          <div class="field"><label>Persistence</label><select id="eDbPersistence"></select></div>
+          <div class="field"><label>TLS mode</label>
+            <select id="eTls"><option value="">Disabled</option><option value="enabled">enabled</option></select>
+            <div class="hint">Clients must then trust the cluster's internal CA.</div></div>
+          <div class="field"><label>Restrict access to namespaces</label>
+            <div class="nspick" id="eAllowNs"></div>
+            <div class="hint">Verify the generated podSelector matches your rec-* pods.</div></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="ePreview" class="ghost">Preview YAML</button>
+        <button id="eDeploy">Deploy</button>
+      </div>
+    </section>
+
+    <section id="panelPreview" class="card hide">
+      <h2>Generated manifests</h2>
+      <div class="sub">Exactly what will be applied. Nothing else is sent to the cluster.</div>
+      <pre id="previewYaml"></pre>
+      <div class="row"><button class="ghost" id="copyYaml">Copy</button>
+        <button class="ghost" id="closePreview">Close</button></div>
+    </section>
+
+    <section id="panelJob" class="card hide">
+      <h2>Deployment <span id="jobSpin" class="spin"></span></h2>
+      <div class="sub" id="jobSub">Running &mdash; the log streams live.</div>
+      <pre id="log"></pre>
+    </section>
+
+    <section id="panelResult" class="card hide">
+      <h2>Connection details</h2>
+      <div id="resultBody"></div>
+    </section>
+  </div>
+
+  <!-- ---------- CLUSTER ---------- -->
+  <div id="tabCluster" class="hide">
+    <section class="card">
+      <h2>Cluster overview</h2>
+      <div class="sub" id="clusterSub">Loading&hellip;</div>
+      <div id="clusterWarn"></div>
+      <h3 style="font-size:13px;margin:18px 0 8px">Nodes</h3>
+      <table id="nodeTable"></table>
+      <h3 style="font-size:13px;margin:22px 0 8px">Storage classes</h3>
+      <table id="scTable"></table>
+      <div class="row"><button class="ghost" id="refreshCluster">Refresh</button></div>
+    </section>
+  </div>
+
+  <!-- ---------- SIZING ---------- -->
+  <div id="tabSizing" class="hide">
+    <section class="card">
+      <h2>Redis sizing calculator</h2>
+      <div class="sub">Redis holds everything in RAM. This works out how much RAM you actually need &mdash; dataset, plus per-key overhead, plus the headroom a fork needs during a save &mdash; and checks it against this cluster.</div>
+
+      <div class="alert i" id="zMeasureBar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span style="flex:1;min-width:240px"><strong>Guessing these numbers is the weak point.</strong>
+          Measure a running Redis instead &mdash; it reads the real key count, sizes, TTL ratio
+          and outliers, then fills this form in.</span>
+        <button class="ghost" id="zMeasure" style="padding:6px 14px">Measure a running Redis</button>
+      </div>
+      <div id="zMeasurePick" class="hide" style="margin-bottom:16px">
+        <table id="zRelTable"></table>
+      </div>
+      <div id="zAnalysis"></div>
+
+      <h3 style="font-size:13px;margin:18px 0 8px">Your data</h3>
+      <div class="grid g3">
+        <div class="field"><label>Number of keys</label><input id="zKeys" type="number" value="1000000">
+          <div class="hint">At peak, not today.</div></div>
+        <div class="field"><label>Average key length (bytes)</label><input id="zKeyLen" type="number" value="32">
+          <div class="hint">e.g. <span class="mono">user:session:1234567</span> = 19</div></div>
+        <div class="field"><label>Average value size (bytes)</label><input id="zValLen" type="number" value="512"></div>
+      </div>
+      <div class="grid g3" style="margin-top:14px">
+        <div class="field"><label>Data structure</label>
+          <select id="zType">
+            <option value="string">String</option>
+            <option value="hash">Hash</option>
+            <option value="list">List</option>
+            <option value="set">Set</option>
+            <option value="zset">Sorted set</option>
+          </select>
+          <div class="hint" id="zTypeHint"></div></div>
+        <div class="field"><label>TTL on keys?</label>
+          <select id="zTtl"><option value="1">Yes &mdash; most keys expire</option><option value="0">No</option></select>
+          <div class="hint">An expiry costs ~32 extra bytes per key.</div></div>
+        <div class="field"><label>Headroom for growth</label>
+          <select id="zGrowth">
+            <option value="0">None &mdash; this is the peak</option>
+            <option value="25">+25%</option>
+            <option value="50" selected>+50%</option>
+            <option value="100">+100% (double)</option>
+          </select></div>
+      </div>
+
+      <h3 style="font-size:13px;margin:22px 0 8px">How you will run it</h3>
+      <div class="grid g3">
+        <div class="field"><label>Persistence</label>
+          <select id="zPersist">
+            <option value="aof">AOF &mdash; durable</option>
+            <option value="rdb">RDB snapshots only</option>
+            <option value="none">None &mdash; pure cache</option>
+          </select>
+          <div class="hint">Drives disk size and fork headroom.</div></div>
+        <div class="field"><label>Copies of the data</label>
+          <select id="zCopies">
+            <option value="1">1 &mdash; standalone</option>
+            <option value="2" selected>2 &mdash; primary + 1 replica</option>
+            <option value="3">3 &mdash; primary + 2 replicas</option>
+          </select>
+          <div class="hint">Each copy needs the full RAM.</div></div>
+        <div class="field"><label>Write load</label>
+          <select id="zWrite">
+            <option value="0.3">Light &mdash; mostly reads</option>
+            <option value="0.5" selected>Moderate</option>
+            <option value="0.8">Heavy &mdash; write-through cache</option>
+          </select>
+          <div class="hint">Decides copy-on-write cost during a save.</div></div>
+      </div>
+
+      <div id="zResult" style="margin-top:22px"></div>
+      <div id="zFeasible"></div>
+      <div id="zAssumptions"></div>
+    </section>
+
+    <section class="card">
+      <h2>Reverse: what fits in what I have?</h2>
+      <div class="sub">Start from the hardware instead.</div>
+      <div class="grid g3">
+        <div class="field"><label>Container / node memory limit</label><input id="rMem" value="1Gi"></div>
+        <div class="field"><label>Persistence</label>
+          <select id="rPersist"><option value="aof">AOF</option><option value="rdb">RDB</option><option value="none">None</option></select></div>
+        <div class="field"><label>Product</label>
+          <select id="rProduct">
+            <option value="community">Redis community / Opstree</option>
+            <option value="enterprise">Redis Enterprise</option>
+          </select>
+          <div class="hint">Enterprise runs ~12 processes per node, so it reserves more.</div></div>
+      </div>
+      <div id="rResult" style="margin-top:18px"></div>
+    </section>
+  </div>
+
+  <!-- ---------- OPERATORS ---------- -->
+  <div id="tabOperators" class="hide">
+    <section class="card">
+      <h2>Search OperatorHub</h2>
+      <div class="sub" id="opIndexed">Loading catalog&hellip;</div>
+      <div class="grid g3">
+        <div class="field" style="grid-column:1/3">
+          <label>Search</label>
+          <input id="opQ" placeholder="redis, cache, database, postgres, kafka&hellip;">
+          <div class="hint">Matches name, provider, keywords, categories and description. All words must match.</div>
+        </div>
+        <div class="field">
+          <label>Catalog</label><select id="opCatalog"><option value="">All catalogs</option></select>
+        </div>
+      </div>
+      <div class="grid g3" style="margin-top:14px">
+        <div class="field"><label>Category</label><select id="opCategory"><option value="">Any category</option></select></div>
+        <div class="field" style="display:flex;align-items:flex-end">
+          <label class="chk"><input type="checkbox" id="opCertified"> Certified only</label>
+        </div>
+        <div class="field" style="display:flex;align-items:flex-end;gap:8px">
+          <button class="ghost" id="opRefresh">Refresh catalog</button>
+          <span class="dim" id="opCount"></span>
+        </div>
+      </div>
+      <table id="opTable" style="margin-top:16px"></table>
+    </section>
+
+    <section class="card hide" id="opDetailCard">
+      <h2 id="opTitle"></h2>
+      <div class="sub" id="opSubtitle"></div>
+      <div id="opMeta"></div>
+      <div id="opDesc" style="margin-top:14px;font-size:13px;line-height:1.6;color:var(--dim);max-height:160px;overflow:auto"></div>
+
+      <h3 style="font-size:13px;margin:20px 0 8px">Custom resources it provides</h3>
+      <table id="opApis"></table>
+
+      <h3 style="font-size:13px;margin:20px 0 8px">Install</h3>
+      <div id="opInstalledNote"></div>
+      <div class="grid g3">
+        <div class="field"><label>Channel</label><select id="opChannel"></select></div>
+        <div class="field"><label>Version (CSV)</label><input id="opCsv" class="mono" readonly></div>
+        <div class="field"><label>Install mode</label><select id="opMode"></select>
+          <div class="hint" id="opModeHint"></div></div>
+      </div>
+      <div class="grid g3" style="margin-top:14px">
+        <div class="field"><label>Namespace</label><input id="opNamespace"></div>
+        <div class="field"><label>Update approval</label>
+          <select id="opApproval">
+            <option value="Manual">Manual &mdash; recommended</option>
+            <option value="Automatic">Automatic</option>
+          </select></div>
+        <div class="field hide" id="wrapOpTarget"><label>Target namespace</label><input id="opTarget"></div>
+      </div>
+      <div class="alert i" style="margin-top:14px">Installs the <strong>operator only</strong>. It creates no custom resources, so nothing runs until you create the CRs listed above. For Redis, use the Deploy tab instead &mdash; it creates the operator <em>and</em> the cluster and database.</div>
+      <div class="row">
+        <button class="ghost" id="opPreview">Preview YAML</button>
+        <button id="opInstall">Install operator</button>
+        <button class="ghost hide" id="opUseDeploy">Configure a Redis deployment instead</button>
+        <button class="ghost" id="opClose">Close</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Installed operators</h2>
+      <div class="sub">Every Subscription on this cluster, with its CSV phase.</div>
+      <table id="opInstalled"></table>
+      <div class="row"><button class="ghost" id="opInstalledRefresh">Refresh</button></div>
+    </section>
+  </div>
+
+  <!-- ---------- TESTS ---------- -->
+  <div id="tabTests" class="hide">
+    <section class="card">
+      <h2>Pick a release to test</h2>
+      <div class="sub">Tests run from a throwaway pod <strong>inside</strong> the cluster &mdash; not via port-forward, which would tunnel past your NetworkPolicy and hide exactly the faults worth catching.</div>
+      <div class="row" style="margin-top:0">
+        <button class="ghost" id="tRefresh">Rescan cluster</button>
+        <span class="dim" id="tScanState"></span>
+      </div>
+      <table id="tTable" style="margin-top:14px"></table>
+    </section>
+
+    <section class="card hide" id="tSelectCard">
+      <h2>Tests for <span class="mono" id="tTitle"></span></h2>
+      <div id="tTargetInfo"></div>
+
+      <div class="grid g2" style="margin-top:16px">
+        <div class="field">
+          <label>Run the test client from namespace</label>
+          <input id="tClientNs" list="nsList">
+          <div class="hint" id="tClientHint"></div>
+        </div>
+      </div>
+
+      <div id="tTiers" style="margin-top:18px"></div>
+
+      <div id="tDanger"></div>
+      <div class="row">
+        <button id="tRun">Run selected tests</button>
+        <button class="ghost" id="tSelectSafe">Select safe only</button>
+        <button class="ghost" id="tSelectAll">Select all</button>
+        <button class="ghost" id="tClear">Clear</button>
+      </div>
+    </section>
+
+    <section class="card hide" id="tReportCard">
+      <h2>Report</h2>
+      <div id="tSummary"></div>
+      <pre id="tReport" style="margin-top:14px"></pre>
+      <div class="row">
+        <button class="ghost" id="tCopyReport">Copy Markdown</button>
+        <button class="ghost" id="tDownloadReport">Download</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- ---------- STATUS ---------- -->
+  <div id="tabStatus" class="hide">
+    <section class="card">
+      <h2>Deployed releases</h2>
+      <div class="sub">Everything Redis-shaped on the cluster. Pick one to see what it is actually doing.</div>
+      <div class="row" style="margin-top:0">
+        <button class="ghost" id="sRefresh">Rescan cluster</button>
+        <span class="dim" id="sScanState"></span>
+      </div>
+      <table id="sTable" style="margin-top:14px"></table>
+      <div class="row">
+        <button class="ghost" id="sManualToggle" style="padding:6px 12px">Check another namespace</button>
+      </div>
+      <div id="sManual" class="hide grid g3" style="margin-top:12px">
+        <div class="field"><label>Namespace</label><input id="sNamespace" list="nsList" placeholder="redis"></div>
+        <div class="field" style="display:flex;align-items:flex-end"><button id="sCheck">Check</button></div>
+      </div>
+    </section>
+
+    <section class="card hide" id="sDetailCard">
+      <h2>Status of <span class="mono" id="sTitle"></span>
+        <span class="spin hide" id="sSpin"></span></h2>
+      <div id="sLive"></div>
+      <div id="sBody"></div>
+      <div class="row"><button class="ghost" id="sReload">Refresh</button></div>
+    </section>
+  </div>
+
+  <!-- ---------- UNINSTALL ---------- -->
+  <div id="tabUninstall" class="hide">
+    <section class="card">
+      <h2>Installed releases</h2>
+      <div class="sub">Found on the cluster &mdash; both what this app deployed and anything else Redis-shaped.</div>
+      <div class="row" style="margin-top:0">
+        <button class="ghost" id="uRefresh">Rescan cluster</button>
+        <span class="dim" id="uScanState"></span>
+      </div>
+      <table id="uTable" style="margin-top:14px"></table>
+      <div id="uLeftovers" style="margin-top:16px"></div>
+      <div class="row">
+        <button class="ghost" id="uManualToggle" style="padding:6px 12px">Enter manually instead</button>
+      </div>
+      <div id="uManual" class="hide grid g3" style="margin-top:12px">
+        <div class="field"><label>Type</label>
+          <select id="mKind"><option value="community">Community</option><option value="enterprise">Enterprise</option></select></div>
+        <div class="field"><label>Namespace</label><input id="mNamespace" placeholder="redis"></div>
+        <div class="field" style="display:flex;gap:8px;align-items:flex-end">
+          <div style="flex:1"><label>Release name</label><input id="mName" placeholder="redis"></div>
+          <button class="ghost" id="mUse">Use</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card hide" id="uDetailCard">
+      <h2>Uninstall <span class="mono" id="uTitle"></span></h2>
+      <div id="uSummary"></div>
+      <h3 style="font-size:13px;margin:20px 0 8px">What this will delete</h3>
+      <div id="uPlan"></div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="uPvc"> Also delete PersistentVolumeClaims</label>
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="uNs"> Also delete the namespace</label>
+      </div>
+      <div id="uDanger"></div>
+      <div class="row">
+        <button class="danger" id="uGo">Uninstall</button>
+        <button class="ghost" id="uCancel">Cancel</button>
+      </div>
+    </section>
+  </div>
+
+</div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

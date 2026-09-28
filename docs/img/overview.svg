@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 430" width="900" height="430" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">
+<style>
+ .bg{fill:#0f1115} .panel{fill:#171a21;stroke:#2b313d} .panel2{fill:#1e222b;stroke:#2b313d}
+ .t{fill:#d7dce5;font-size:13px} .dim{fill:#8b94a6;font-size:11.5px} .h{fill:#d7dce5;font-size:14px;font-weight:600}
+ .acc{fill:#4f8cff;font-size:12px} .ok{fill:#3fb950;font-size:11.5px} .warn{fill:#d29922;font-size:11.5px}
+ .arw{stroke:#4f8cff;stroke-width:1.5;fill:none;marker-end:url(#a)}
+</style>
+<defs><marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+ <path d="M0,0 L9,4.5 L0,9 z" fill="#4f8cff"/></marker></defs>
+<rect class="bg" width="900" height="430"/>
+<text class="h" x="24" y="32">RedisCover</text>
+<text class="dim" x="24" y="52">runs on your bastion · talks to the cluster through the oc CLI · nothing is installed in-cluster</text>
+
+<rect class="panel" x="24" y="72" width="200" height="120" rx="7"/>
+<text class="t" x="40" y="96">Bastion / installer</text>
+<rect class="panel2" x="40" y="108" width="168" height="30" rx="5"/>
+<text class="acc" x="52" y="128">RedisCover :8800</text>
+<text class="dim" x="40" y="158">FastAPI + one HTML page</text>
+<text class="dim" x="40" y="176">per-session kubeconfig 0600</text>
+
+<path class="arw" d="M228 132 L296 132"/>
+<text class="dim" x="234" y="124">oc</text>
+
+<rect class="panel" x="300" y="72" width="576" height="330" rx="7"/>
+<text class="t" x="316" y="96">OpenShift cluster</text>
+
+<rect class="panel2" x="316" y="110" width="172" height="92" rx="5"/>
+<text class="t" x="328" y="132">Redis community</text>
+<text class="dim" x="328" y="150">Deployment or StatefulSet</text>
+<text class="dim" x="328" y="166">standalone · replication</text>
+<text class="ok" x="328" y="186">no operator needed</text>
+
+<rect class="panel2" x="500" y="110" width="172" height="92" rx="5"/>
+<text class="t" x="512" y="132">Opstree operator</text>
+<text class="dim" x="512" y="150">Redis / Replication /</text>
+<text class="dim" x="512" y="166">Sentinel / Cluster</text>
+<text class="ok" x="512" y="186">4 topologies, free</text>
+
+<rect class="panel2" x="684" y="110" width="176" height="92" rx="5"/>
+<text class="t" x="696" y="132">Redis Enterprise</text>
+<text class="dim" x="696" y="150">REC + REDB via OLM</text>
+<text class="dim" x="696" y="166">sharding, auto failover</text>
+<text class="warn" x="696" y="186">licence required</text>
+
+<rect class="panel2" x="316" y="218" width="544" height="72" rx="5"/>
+<text class="t" x="328" y="240">Before it writes anything it reads your cluster</text>
+<text class="dim" x="328" y="260">nodes · taints · free CPU and memory · storage classes and their provisioners · zone labels</text>
+<text class="dim" x="328" y="278">refuses file/NAS storage for a database · refuses more replicas than schedulable nodes</text>
+
+<rect class="panel2" x="316" y="306" width="544" height="80" rx="5"/>
+<text class="t" x="328" y="328">After it deploys, it proves the thing works</text>
+<text class="dim" x="328" y="348">14 tests in 3 tiers · kills the primary and measures the write outage in seconds</text>
+<text class="dim" x="328" y="366">measures the real keyspace and sizes the next deployment from it</text>
+</svg>
