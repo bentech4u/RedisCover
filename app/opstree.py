@@ -20,12 +20,28 @@ API_VERSION = f"{OPSTREE_GROUP}/v1beta2"
 
 
 def image_for(spec: OpstreeSpec) -> str:
+    """Sentinel runs a DIFFERENT binary and Opstree ships it as a different
+    image. Using quay.io/opstree/redis for a RedisSentinel starts a plain
+    redis-server on 6379 while the Service points at 26379, so every connection
+    is refused and the pod looks healthy while doing nothing useful."""
     if spec.custom_image:
         return spec.custom_image
-    for v in OPSTREE_VERSIONS:
-        if v["id"] == spec.version_id:
-            return v["image"]
-    return OPSTREE_VERSIONS[0]["image"]
+    base = next((v["image"] for v in OPSTREE_VERSIONS if v["id"] == spec.version_id),
+                OPSTREE_VERSIONS[0]["image"])
+    if spec.topology == "sentinel":
+        return base.replace("/opstree/redis:", "/opstree/redis-sentinel:")
+    return base
+
+
+def auth_secret_name(spec: OpstreeSpec) -> str:
+    """Sentinel must authenticate to the primary it monitors, so it needs the
+    SAME credentials as that RedisReplication -- not a fresh secret of its own.
+    Generating one would overwrite the replication's secret when the names
+    collide, leaving the running pods on a password nothing else knows."""
+    if spec.topology == "sentinel":
+        base = spec.replication_name or f"{spec.name}-replication"
+        return f"{base}-auth"
+    return f"{spec.name}-auth"
 
 
 def _kubernetes_config(spec: OpstreeSpec) -> dict[str, Any]:
@@ -38,7 +54,7 @@ def _kubernetes_config(spec: OpstreeSpec) -> dict[str, Any]:
         },
     }
     if spec.auth_enabled:
-        cfg["redisSecret"] = {"name": f"{spec.name}-auth", "key": "password"}
+        cfg["redisSecret"] = {"name": auth_secret_name(spec), "key": "password"}
     return cfg
 
 
@@ -85,10 +101,13 @@ def manifests(spec: OpstreeSpec, password: str) -> list[dict]:
         {"apiVersion": "v1", "kind": "Namespace",
          "metadata": {"name": ns, "labels": {"name": ns}}},
     ]
-    if spec.auth_enabled:
+    # a sentinel reuses the monitored replication's secret; creating one here
+    # would clobber it and lock the running pods out
+    if spec.auth_enabled and spec.topology != "sentinel":
         objs.append({
             "apiVersion": "v1", "kind": "Secret",
-            "metadata": {"name": f"{name}-auth", "namespace": ns, "labels": labels},
+            "metadata": {"name": auth_secret_name(spec), "namespace": ns,
+                         "labels": labels},
             "type": "Opaque",
             "data": {"password": base64.b64encode(password.encode()).decode()},
         })

@@ -40,6 +40,8 @@ class Target:
     primary: str = ""
     replicas: list[str] = field(default_factory=list)
     workload: str = "deployment"
+    sentinel_host: str = ""
+    sentinel_port: int = 26379
     allowed_ns: list[str] = field(default_factory=list)
 
 
@@ -54,10 +56,22 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
                    log=None) -> Target:
     t = Target(kind=kind, namespace=namespace, name=name)
 
-    # topology, from the label this app stamps on what it deploys
-    t.topology = ocp.jsonpath(
-        kubeconfig, ["get", "all", "-n", namespace, "-l", f"app={name}"],
-        "{.items[0].metadata.labels.redis-deployer/topology}") or "standalone"
+    # Ask the API which custom resource exists, rather than reading a label off
+    # whatever `oc get all` happens to return first. An operator-managed release
+    # has both a RedisReplication and a RedisSentinel under the same name.
+    if kind == "opstree":
+        for crd, topo, port in (("redissentinel", "sentinel", 26379),
+                                ("rediscluster", "cluster", 6379),
+                                ("redisreplication", "replication", 6379),
+                                ("redis", "standalone", 6379)):
+            if ocp.run(kubeconfig, ["get", crd, name, "-n", namespace],
+                       check=False, timeout=30).returncode == 0:
+                t.topology, t.port = topo, port
+                break
+    else:
+        t.topology = ocp.jsonpath(
+            kubeconfig, ["get", "all", "-n", namespace, "-l", f"app={name}"],
+            "{.items[0].metadata.labels.redis-deployer/topology}") or "standalone"
 
     if ocp.run(kubeconfig, ["get", "statefulset", name, "-n", namespace],
                check=False, timeout=30).returncode == 0:
@@ -77,11 +91,25 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
             if t.password:
                 break
         domain = ocp.cluster_domain(kubeconfig, namespace)
-        t.host = f"{name}.{namespace}.svc.{domain}"
+        if t.topology == "sentinel":
+            # Sentinel is a control plane, not a data endpoint: it answers
+            # SENTINEL commands on 26379 and never serves keys. The data
+            # endpoint is whichever pod it currently considers the primary.
+            t.sentinel_host = f"{name}-sentinel.{namespace}.svc.{domain}"
+            t.host = f"{name}.{namespace}.svc.{domain}"
+            t.port = 6379
+        else:
+            t.host = f"{name}.{namespace}.svc.{domain}"
         if t.topology == "replication":
             t.read_host = f"{name}-read.{namespace}.svc.{domain}"
 
-    p = ocp.run(kubeconfig, ["get", "pods", "-n", namespace, "-l", f"app={name}",
+    selector = f"app={name}"
+    if t.topology in ("sentinel", "replication", "cluster"):
+        # both sets of pods share app=<name>; role= separates them
+        role = {"sentinel": "sentinel", "replication": "replication"}.get(t.topology)
+        if role:
+            selector += f",role={role}"
+    p = ocp.run(kubeconfig, ["get", "pods", "-n", namespace, "-l", selector,
                              "-o", "jsonpath={range .items[*]}{.metadata.name}{\" \"}{end}"],
                 check=False, timeout=45)
     t.pods = sorted((p.stdout or "").split())

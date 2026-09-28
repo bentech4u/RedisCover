@@ -862,6 +862,28 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
 
     job.step(4, total, "Applying")
     objs = ot.manifests(spec, password)
+
+    # Overwriting a live auth Secret with a freshly generated password leaves the
+    # running pods on the old one -- they only read it at startup -- so every
+    # client, and the operator itself, starts getting WRONGPASS.
+    secret_name = ot.auth_secret_name(spec)
+    if spec.auth_enabled and not spec.password:
+        exists = ocp.run(kubeconfig, ["get", "secret", secret_name, "-n", spec.namespace],
+                         check=False, timeout=30).returncode == 0
+        creates_secret = any(o["kind"] == "Secret" for o in objs)
+        if exists and creates_secret:
+            using = ocp.run(kubeconfig,
+                            ["get", "pods", "-n", spec.namespace, "--no-headers"],
+                            check=False, timeout=30).stdout.strip()
+            if using:
+                raise RuntimeError(
+                    f"Secret '{secret_name}' already exists in '{spec.namespace}' and pods "
+                    "are running against it. Deploying would overwrite it with a NEW random "
+                    "password, but running pods only read it at startup -- they would keep "
+                    "the old one and every client would get WRONGPASS. Either supply the "
+                    "existing password explicitly, or pick a different release name, or "
+                    "remove the old release first.")
+            job.log(f"  reusing the existing Secret name '{secret_name}' (no pods running)")
     if spec.allow_namespaces:
         # cluster gossips on port+10000; sentinel listens on 26379
         peer_ports = {"cluster": [16379], "sentinel": [26379]}.get(spec.topology, [])
