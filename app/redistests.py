@@ -110,7 +110,8 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
             t.watches = ocp.jsonpath(
                 kubeconfig, ["get", "redissentinel", name, "-n", namespace],
                 "{.spec.redisSentinelConfig.redisReplicationName}") or ""
-            t.host, t.port = _ask_sentinel(kubeconfig, t, log)
+            # the data endpoint is resolved AFTER the pod list exists -- asking
+            # Sentinel requires a pod to exec into
         else:
             t.host = f"{name}.{namespace}.svc.{domain}"
         if t.topology == "replication":
@@ -140,6 +141,9 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
             t.primary = t.primary or pod
         elif role in ("slave", "replica"):
             t.replicas.append(pod)
+
+    if t.topology == "sentinel":
+        t.host, t.port = _ask_sentinel(kubeconfig, t, log)
 
     pol = ocp.jsonpath(
         kubeconfig, ["get", "networkpolicy", "-n", namespace],
