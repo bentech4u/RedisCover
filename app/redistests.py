@@ -155,9 +155,10 @@ def _ask_sentinel(kubeconfig: str, t: Target, log=None) -> tuple[str, int]:
     This is the only correct way to find a Sentinel-managed primary: after a
     failover it is a different pod, and any hardcoded host is wrong.
     """
+    auth = ["-a", t.password, "--no-auth-warning"] if t.password else []
     for pod in t.pods or []:
         p = ocp.run(kubeconfig, ["exec", "-n", t.namespace, pod, "--", "redis-cli",
-                                 "-p", str(t.sentinel_port),
+                                 "-p", str(t.sentinel_port), *auth,
                                  "SENTINEL", "get-master-addr-by-name", t.master_group],
                     check=False, timeout=45)
         lines = [l.strip() for l in (p.stdout or "").splitlines() if l.strip()]
@@ -470,9 +471,11 @@ def t_sentinel(ctx) -> Result:
         return Result("sentinel", "Sentinel is monitoring a primary", "skip", "no pods")
     pod = t.pods[0]
 
+    auth = ["-a", t.password, "--no-auth-warning"] if t.password else []
+
     def sent(*args):
         p = ocp.run(ctx.kubeconfig, ["exec", "-n", t.namespace, pod, "--", "redis-cli",
-                                     "-p", str(t.sentinel_port), "SENTINEL", *args],
+                                     "-p", str(t.sentinel_port), *auth, "SENTINEL", *args],
                     check=False, timeout=45)
         return (p.stdout or "") + (p.stderr or "")
 
@@ -498,9 +501,20 @@ def t_sentinel(ctx) -> Result:
 
     detail = (f"group '{t.master_group}' primary={':'.join(addr[:2]) if len(addr) >= 2 else '?'} "
               f"flags={flags} replicas={slaves} other-sentinels={sentinels} quorum={quorum}")
-    if "o_down" in flags or "s_down" in flags:
+    if "s_down" in flags or "o_down" in flags:
+        hint = ""
+        probe = ocp.run(ctx.kubeconfig,
+                        ["exec", "-n", t.namespace, pod, "--", "sh", "-c",
+                         f"timeout 5 redis-cli -h {addr[0]} -p {addr[1] if len(addr) > 1 else 6379} PING"],
+                        check=False, timeout=30) if len(addr) >= 2 else None
+        if probe and "NOAUTH" in ((probe.stdout or "") + (probe.stderr or "")):
+            hint = (" -- Sentinel can REACH the primary but cannot authenticate to it: "
+                    "its config has no 'sentinel auth-pass' line for this group. Add "
+                    f"`sentinel auth-pass {t.master_group} <password>` to the Sentinel's "
+                    "extra redis.conf directives, or the failover it is supposed to "
+                    "perform will never happen.")
         return Result("sentinel", "Sentinel is monitoring a primary", "fail",
-                      detail + " -- the primary is marked DOWN")
+                      detail + (hint or " -- the primary is marked DOWN"))
     try:
         if int(sentinels) + 1 < int(quorum):
             return Result("sentinel", "Sentinel is monitoring a primary", "fail",
