@@ -225,7 +225,14 @@
           <div class="hint">Must already exist &mdash; deploy the replication topology first.</div></div>
         <div class="field"><label>Master group name</label><input id="otMasterGroup" value="myMaster"></div>
         <div class="field"><label>Quorum</label><input id="otQuorum" type="number" value="2" min="1">
-          <div class="hint">Sentinels that must agree the primary is down.</div></div>
+          <div class="hint">Sentinels that must agree the primary is down.</div>
+          <label class="chk" style="margin-top:8px;font-size:11.5px">
+            <input type="checkbox" id="otAuthPass" checked> write <span class="mono">sentinel auth-pass</span></label>
+          <div class="hint">The operator does not write it, so Sentinel cannot authenticate to
+            a password-protected primary &mdash; it marks it <span class="mono">s_down</span> and never
+            fails over. <span class="warn">This places the password in a ConfigMap</span>, readable by
+            anyone with <span class="mono">get configmap</span> in the namespace. Untick only if you
+            will supply it another way.</div></div>
       </div>
 
       <div class="grid g3" style="margin-bottom:16px">
@@ -601,6 +608,13 @@
           <label>Run the test client from namespace</label>
           <input id="tClientNs" list="nsList">
           <div class="hint" id="tClientHint"></div>
+        </div>
+        <div class="field">
+          <label>Password override <span class="dim">(optional)</span></label>
+          <input id="tPassword" type="password" placeholder="read from the release's Secret">
+          <div class="hint">Leave blank and it reads the Secret this release uses. Set it for a
+            release this app did not deploy, or when the Secret has drifted from what the pods
+            actually loaded.</div>
         </div>
       </div>
 

@@ -1278,6 +1278,7 @@ function opstreeSpec() {
     cpu_limit: $('otCpuLim').value.trim(),
     memory_request: $('otMemReq').value.trim(),
     memory_limit: $('otMemLim').value.trim(),
+    sentinel_auth_pass: $('otAuthPass').checked,
     install_operator: $('otInstallOp').checked,
     allow_namespaces: nsPicked('otAllowNs'),
   };
@@ -1346,6 +1347,7 @@ async function pickTestTarget(r) {
   TTESTS = d.tests;
   renderTests();
   $('tClientNs').value = '';
+  $('tPassword').value = '';
   $('tClientHint').textContent =
     'Leave blank to use the first namespace the NetworkPolicy allows, so the real path is exercised.';
   $('tSelectCard').classList.remove('hide');
@@ -1441,6 +1443,7 @@ $('tRun').onclick = async () => {
     body: JSON.stringify({
       kind: TTARGET.kind, namespace: TTARGET.namespace, name: TTARGET.name,
       topology: TTARGET.topology || null,
+      password: $('tPassword').value || null,
       tests, client_namespace: $('tClientNs').value.trim() || null,
       confirm_disruptive: disruptive.length > 0,
     }),

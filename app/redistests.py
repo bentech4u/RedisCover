@@ -55,7 +55,7 @@ def _secret_value(kubeconfig: str, ns: str, name: str, key: str) -> str:
 
 
 def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
-                   log=None, topology: str = "") -> Target:
+                   log=None, topology: str = "", password: str = "") -> Target:
     t = Target(kind=kind, namespace=namespace, name=name)
     if topology:
         # the caller already knows which CR this is; probing would find the
@@ -141,6 +141,11 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
             t.primary = t.primary or pod
         elif role in ("slave", "replica"):
             t.replicas.append(pod)
+
+    if password:
+        t.password = password
+        if log:
+            log("  using the password supplied on the form, not the Secret")
 
     if t.topology == "sentinel":
         t.host, t.port = _ask_sentinel(kubeconfig, t, log)
@@ -811,12 +816,12 @@ class Ctx:
 
 def run_suite(job, kubeconfig: str, kind: str, namespace: str, name: str,
               test_ids: list[str], client_ns: str = "",
-              topology: str = "") -> dict:
+              topology: str = "", password: str = "") -> dict:
     job.log(f"Testing {kind} release {namespace}/{name}"
             + (f" ({topology})" if topology else ""))
     job.step(1, 4, "Resolving the target")
     t = resolve_target(kubeconfig, kind, namespace, name, log=job.log,
-                       topology=topology)
+                       topology=topology, password=password)
     job.log(f"  topology : {t.topology}")
     job.log(f"  endpoint : {t.host}:{t.port}")
     job.log(f"  pods     : {', '.join(t.pods) or 'none'}")

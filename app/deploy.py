@@ -875,6 +875,29 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
             job.log(f"  WARNING: fields not in this CRD version: {', '.join(unknown)}")
             job.log("  the dry run below will reject them if they are genuinely invalid")
 
+    if spec.topology == "sentinel" and spec.auth_enabled:
+        # Sentinel must use the SAME password as the replication it monitors
+        existing = ocp.run(
+            kubeconfig, ["get", "secret", ot.auth_secret_name(spec), "-n", spec.namespace,
+                         "-o", "jsonpath={.data.password}"], check=False, timeout=30
+        ).stdout.strip()
+        if existing:
+            import base64 as _b64
+            password = _b64.b64decode(existing).decode()
+            job.log(f"  reusing the password from '{ot.auth_secret_name(spec)}'")
+        else:
+            raise RuntimeError(
+                f"Secret '{ot.auth_secret_name(spec)}' not found. Sentinel authenticates "
+                "to the primary with that RedisReplication's credentials -- deploy the "
+                "replication first.")
+        if spec.sentinel_auth_pass:
+            job.log("")
+            job.log("  writing `sentinel auth-pass` into the Sentinel config, because the")
+            job.log("  operator does not: without it Sentinel cannot authenticate to the")
+            job.log("  primary, marks it s_down, and never fails over.")
+            job.log("  NOTE: that puts the password in a ConfigMap, readable by anyone")
+            job.log("  with 'get configmap' in this namespace -- weaker than the Secret.")
+
     job.step(4, total, "Applying")
     objs = ot.manifests(spec, password)
 

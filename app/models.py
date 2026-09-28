@@ -130,6 +130,9 @@ class OpstreeSpec(BaseModel):
     replication_name: Optional[str] = None
     master_group: str = "myMaster"
     quorum: int = 2
+    # write `sentinel auth-pass` so Sentinel can authenticate to the primary.
+    # Without it Sentinel marks the primary s_down and can never fail over.
+    sentinel_auth_pass: bool = True
 
     storage_class: Optional[str] = None
     storage_size: str = "5Gi"
@@ -160,6 +163,7 @@ class TestRunSpec(BaseModel):
     name: str
     # Opstree releases are identified by CR kind as well as name
     topology: Optional[str] = None
+    password: Optional[str] = None      # override when the Secret cannot be read
     tests: list[str] = []
     client_namespace: Optional[str] = None
     confirm_disruptive: bool = False
