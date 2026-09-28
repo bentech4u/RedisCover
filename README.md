@@ -44,6 +44,24 @@ typing the release name to confirm.
 | **Status** | Live `INFO` from a running pod, plus pods, services, storage, policies and events. |
 | **Uninstall** | Discovers what is installed and shows a per-object deletion plan before touching anything. |
 
+### Screenshots
+
+**Deploy** — three products, described honestly, so the choice is deliberate.
+
+![Deploy tab](docs/screenshots/01-deploy.png)
+
+**Sizing** — Redis holds everything in RAM, so the calculator shows every step
+from raw data to container limit. "Measure a running Redis" fills it in from a
+live keyspace instead of guesses.
+
+![Sizing calculator](docs/screenshots/02-sizing.png)
+
+**Redis Enterprise** — operator channels and CSVs are read live from the
+cluster's catalog sources, the CSV is pinned, and update approval defaults to
+Manual so a vendor release cannot roll-restart your database unannounced.
+
+![Enterprise form](docs/screenshots/03-enterprise.png)
+
 ---
 
 ## Quick start
