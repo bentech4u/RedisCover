@@ -443,19 +443,31 @@
       <div class="sub">For a cluster that cannot reach Docker Hub or Quay. Every image this app
         generates is rewritten through the mirror. Applies to the Community and Opstree workload
         images and the test client.</div>
-      <div class="grid g3">
+      <div class="grid g2">
         <div class="field"><label>Mirror registry</label>
           <input id="mirrorReg" placeholder="registry.corp.example.com:5000">
-          <div class="hint">Blank = no rewriting.</div></div>
+          <div class="hint">Blank = images are used exactly as listed.</div></div>
         <div class="field"><label>Path convention</label>
           <select id="mirrorMode">
             <option value="replace">replace &mdash; mirror hosts the repo at its root</option>
             <option value="prefix">prefix &mdash; mirror namespaces by upstream registry</option>
           </select>
-          <div class="hint" id="mirrorHint"></div></div>
-        <div class="field" style="display:flex;align-items:flex-end">
-          <button class="ghost" id="mirrorTest">Test a pull</button></div>
+          <div class="hint">Harbor proxy caches and Artifactory remotes usually need
+            <span class="mono">prefix</span>.</div></div>
       </div>
+
+      <div class="hint" id="mirrorHint" style="margin-top:12px"></div>
+
+      <div class="grid g2" style="margin-top:14px">
+        <div class="field"><label>Verify by pulling, in namespace</label>
+          <div style="display:flex;gap:8px">
+            <input id="mirrorNs" list="nsList" placeholder="a namespace you can create pods in">
+            <button class="ghost" id="mirrorTest" style="white-space:nowrap">Test pull</button>
+          </div>
+          <div class="hint">Starts a throwaway pod with the mirrored image and reports whether
+            this cluster could actually fetch it.</div></div>
+      </div>
+
       <div id="mirrorResult" style="margin-top:12px"></div>
       <div class="alert i" style="margin-top:12px">On OpenShift the cluster-level mechanism is an
         <span class="mono">ImageDigestMirrorSet</span>, which rewrites transparently for everything

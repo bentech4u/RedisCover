@@ -1970,8 +1970,9 @@ function mirrorPreview(img) {
 function updateMirrorHint() {
   const ex = 'docker.io/redis:8.2-alpine';
   $('mirrorHint').innerHTML = mirrorSettings()
-    ? `<span class="mono" style="font-size:11px">${ex}<br>&rarr; ${mirrorPreview(ex)}</span>`
-    : 'Blank = images are used exactly as listed.';
+    ? `Resolves as: <span class="mono">${ex}</span> &rarr;
+       <span class="mono ok">${mirrorPreview(ex)}</span>`
+    : 'No mirror set &mdash; images are used exactly as the catalogue lists them.';
 }
 ['mirrorReg', 'mirrorMode'].forEach(id => {
   const e = $(id); if (e) e.addEventListener('input', updateMirrorHint);
@@ -1980,11 +1981,34 @@ function updateMirrorHint() {
 if ($('mirrorHint')) updateMirrorHint();
 
 $('mirrorTest').onclick = async () => {
-  const img = mirrorPreview('docker.io/redis:8.2-alpine');
-  $('mirrorResult').innerHTML =
-    `<div class="alert i">Deploy a test release with this mirror set and watch the log —
-     a pull failure now names the image it could not fetch.
-     Resolved example: <span class="mono">${img}</span></div>`;
+  const btn = $('mirrorTest');
+  const ns = $('mirrorNs').value.trim();
+  if (!ns) return alert('Pick a namespace the probe pod can run in.');
+  btn.disabled = true; btn.textContent = 'Pulling…';
+  $('mirrorResult').innerHTML = '<div class="alert i"><span class="spin"></span> starting a probe pod…</div>';
+  const m = mirrorSettings();
+  try {
+    const d = await api('/api/mirror/test', {
+      method: 'POST',
+      body: JSON.stringify({
+        image: 'docker.io/redis:8.2-alpine', namespace: ns,
+        registry: m ? m.registry : '', mode: m ? m.mode : 'replace',
+      }),
+    });
+    $('mirrorResult').innerHTML = d.ok
+      ? `<div class="alert i"><strong>Pull succeeded.</strong>
+         <span class="mono">${d.image}</span> is reachable from this cluster.</div>`
+      : `<div class="alert e"><strong>Pull failed${d.reason ? ' — ' + d.reason : ''}.</strong>
+         <span class="mono">${d.image}</span>
+         ${d.detail ? '<pre style="margin-top:8px;max-height:140px">' + d.detail + '</pre>' : ''}
+         <div style="margin-top:8px">Check the tag exists on the mirror, that the path
+         convention matches how it namespaces upstream registries, and that a pull secret
+         covers it.</div></div>`;
+  } catch (e) {
+    $('mirrorResult').innerHTML = `<div class="alert e">${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Test pull';
+  }
 };
 
 /* ------------------------------------------------ day-2 */

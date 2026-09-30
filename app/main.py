@@ -418,6 +418,50 @@ def day2(spec: Day2Spec, sid: Optional[str] = Cookie(None)):
     return {"job_id": job.id}
 
 
+@app.post("/api/mirror/test")
+def mirror_test(payload: dict, sid: Optional[str] = Cookie(None)):
+    """Actually pull the mirrored image, rather than just showing the string."""
+    s = _session(sid)
+    kc = s["kubeconfig"]
+    from .catalog import apply_mirror
+    src = (payload or {}).get("image") or "docker.io/redis:8.2-alpine"
+    reg = (payload or {}).get("registry", "").strip()
+    mode = (payload or {}).get("mode", "replace")
+    ns = (payload or {}).get("namespace", "").strip()
+    if not ns:
+        raise HTTPException(400, "a namespace is required to run the probe pod")
+    image = apply_mirror(src, reg, mode) if reg else src
+
+    pod = f"mirrortest-{abs(hash(image)) % 100000}"
+    ocp.run(kc, ["delete", "pod", pod, "-n", ns, "--ignore-not-found",
+                 "--grace-period=0", "--force"], check=False, timeout=60)
+    p = ocp.run(kc, ["run", pod, "-n", ns, "--image", image, "--restart=Never",
+                     "--command", "--", "true"], check=False, timeout=90)
+    if p.returncode != 0:
+        return {"image": image, "ok": False,
+                "detail": (p.stderr or p.stdout or "").strip()[:300]}
+
+    reason = msg = ""
+    ok = False
+    for _ in range(18):
+        phase = ocp.jsonpath(kc, ["get", "pod", pod, "-n", ns], "{.status.phase}")
+        reason = ocp.jsonpath(kc, ["get", "pod", pod, "-n", ns],
+                              "{.status.containerStatuses[0].state.waiting.reason}")
+        msg = ocp.jsonpath(kc, ["get", "pod", pod, "-n", ns],
+                           "{.status.containerStatuses[0].state.waiting.message}")
+        if phase in ("Succeeded", "Running"):
+            ok = True
+            break
+        if reason and ("ImagePull" in reason or "ErrImage" in reason or "Invalid" in reason):
+            break
+        import time as _t
+        _t.sleep(5)
+    ocp.run(kc, ["delete", "pod", pod, "-n", ns, "--ignore-not-found",
+                 "--grace-period=0", "--force"], check=False, timeout=60)
+    return {"image": image, "source": src, "ok": ok,
+            "reason": reason, "detail": msg[:300] if msg else ""}
+
+
 @app.get("/api/namespaces")
 def namespaces(sid: Optional[str] = Cookie(None)):
     """All namespaces, flagged system vs user, with a workload count.
