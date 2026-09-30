@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import deploy, discover as discovery, ocp, operators as ophub
 from . import analyze as keyspace
+from . import inspect as inspector
 from . import redistests
 from . import opstree as ot
 from .catalog import (
@@ -93,6 +94,15 @@ def index():
 @app.get("/api/detect-server")
 def detect_server():
     return {"server": ocp.detect_server()}
+
+
+@app.post("/api/inspect")
+def inspect_server(payload: dict):
+    """Show what is at the other end BEFORE any credentials are sent."""
+    server = (payload or {}).get("server", "").strip()
+    if not server:
+        raise HTTPException(400, "server is required")
+    return inspector.inspect(server)
 
 
 @app.post("/api/login")

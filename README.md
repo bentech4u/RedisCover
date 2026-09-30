@@ -17,6 +17,12 @@ This tool **authenticates as you and acts with your privileges**. Logging in as
 `kubeadmin` means it can do anything on the cluster, including delete
 namespaces and persistent volumes.
 
+* **Inspect before you sign in.** The connect screen contacts the endpoint first
+  and shows the cluster it belongs to, the certificate subject, issuer, validity
+  and SHA-256 fingerprint, before any credentials are sent. An OpenShift API
+  server is signed by a cluster-internal CA, so it will not validate against the
+  system bundle -- which is exactly why people tick "skip TLS verification" and
+  stop looking. Comparing the fingerprint is the check that actually matters.
 * It binds to `127.0.0.1` by default. Setting `DEPLOYER_HOST=0.0.0.0` prints a
   warning — use an SSH tunnel instead.
 * Your password is used once, for `oc login`, and is **never stored**. What

@@ -27,16 +27,33 @@
   <div class="grid g2">
     <div class="field" style="grid-column:1/-1">
       <label>API server URL</label>
-      <input id="server" placeholder="https://api.cluster.example.com:6443">
-      <div class="hint">Auto-detected from this host's kubeconfig where possible.</div>
+      <div style="display:flex;gap:8px">
+        <input id="server" placeholder="https://api.cluster.example.com:6443">
+        <button class="ghost" id="btnInspect" style="white-space:nowrap">Inspect</button>
+      </div>
+      <div class="hint">Auto-detected from this host's kubeconfig where possible.
+        Inspect first &mdash; it identifies the cluster and shows the certificate
+        <strong>before</strong> any credentials are sent.</div>
     </div>
-    <div class="field"><label>Username</label><input id="username" value="kubeadmin" autocomplete="username"></div>
-    <div class="field"><label>Password</label><input id="password" type="password" autocomplete="current-password"></div>
   </div>
-  <div class="row">
-    <label class="chk"><input type="checkbox" id="insecure" checked> Skip TLS verification</label>
+
+  <div id="inspectPanel" class="hide" style="margin-top:16px"></div>
+
+  <div id="credBlock" class="hide">
+    <div class="grid g2" style="margin-top:16px">
+      <div class="field"><label>Username</label><input id="username" value="kubeadmin" autocomplete="username"></div>
+      <div class="field"><label>Password</label><input id="password" type="password" autocomplete="current-password"></div>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="insecure" checked> Skip TLS verification</label>
+      <span class="hint" id="insecureHint" style="margin:0"></span>
+    </div>
+    <div class="row"><button id="btnLogin">Connect</button></div>
   </div>
-  <div class="row"><button id="btnLogin">Connect</button></div>
+
+  <div class="row" id="skipInspectRow">
+    <button class="ghost" id="btnSkipInspect" style="padding:6px 12px">Skip the check and enter credentials</button>
+  </div>
 </section>
 
 <!-- ============ MAIN ============ -->

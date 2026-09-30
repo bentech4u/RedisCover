@@ -68,6 +68,89 @@ let STATE = { kind: null, preflight: null, community: null, enterprise: null };
   } catch {}
 })();
 
+$('btnSkipInspect').onclick = () => {
+  $('credBlock').classList.remove('hide');
+  $('skipInspectRow').classList.add('hide');
+  $('insecureHint').innerHTML =
+    '<span class="warn">You did not inspect the endpoint — you are trusting whatever certificate it presents.</span>';
+};
+
+$('btnInspect').onclick = async () => {
+  const btn = $('btnInspect');
+  const panel = $('inspectPanel');
+  btn.disabled = true; btn.textContent = 'Checking…';
+  panel.classList.remove('hide');
+  panel.innerHTML = '<div class="alert i"><span class="spin"></span> contacting the endpoint…</div>';
+  try {
+    const d = await api('/api/inspect', {
+      method: 'POST', body: JSON.stringify({ server: $('server').value.trim() }),
+    });
+    renderInspect(d);
+  } catch (e) {
+    panel.innerHTML = `<div class="alert e">${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Inspect';
+  }
+};
+
+function renderInspect(d) {
+  const panel = $('inspectPanel');
+  if (d.error) {
+    panel.innerHTML = `<div class="alert e">${d.error}</div>`;
+    return;
+  }
+  const c = d.cert || {}, cl = d.cluster || {};
+  const rows = [];
+  if (cl.cluster_domain) rows.push(['Cluster', cl.cluster_domain]);
+  if (cl.kubernetes) rows.push(['Kubernetes', cl.kubernetes]);
+  if (cl.console) rows.push(['Console', `<a href="${cl.console}" target="_blank" rel="noopener">${cl.console}</a>`]);
+  if (cl.oauth_issuer) rows.push(['OAuth issuer', cl.oauth_issuer]);
+  rows.push(['Endpoint', `${d.host}:${d.port}`]);
+  if (c.subject) rows.push(['Certificate subject', c.subject]);
+  if (c.issuer) rows.push(['Issued by', c.issuer]);
+  if (c.sans) rows.push(['Valid for', c.sans.join(', ')]);
+  if (c.not_after) rows.push(['Expires', `${c.not_after}` +
+    (c.days_until_expiry != null ? `  (${c.days_until_expiry} days)` : '')]);
+  rows.push(['System CA trust', d.trusted
+    ? '<span class="ok">trusted</span>'
+    : `<span class="warn">not trusted — ${d.verify_error}</span>`]);
+
+  const warn = (d.warnings || []).map(w => `<div class="alert w">${w}</div>`).join('');
+
+  panel.innerHTML = `
+    <div class="alert ${d.trusted ? 'i' : 'w'}"><strong>
+      ${cl.cluster_domain ? 'This is cluster <span class="mono">' + cl.cluster_domain + '</span>'
+        : 'Endpoint reachable'}</strong>
+      — check it is the one you intend before sending credentials.</div>
+    <div class="kv">${rows.map(([k, v]) => `<div>${k}</div><div class="mono">${v}</div>`).join('')}</div>
+    ${c.sha256 ? `<h3 style="font-size:13px;margin:18px 0 6px">SHA-256 fingerprint</h3>
+      <pre style="max-height:none;font-size:11.5px">${c.sha256}</pre>
+      <div class="hint">Compare this with a value you already trust. On a machine that
+        has the cluster's kubeconfig:
+        <span class="mono">openssl s_client -connect ${d.host}:${d.port} &lt;/dev/null 2>/dev/null
+        | openssl x509 -noout -fingerprint -sha256</span></div>` : ''}
+    ${warn}
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="certOk">
+        ${d.trusted ? 'This is the cluster I intend to connect to'
+                    : 'I have verified this fingerprint and this is the cluster I intend to connect to'}</label>
+    </div>
+    <div class="row"><button id="btnProceed" disabled>Continue to sign in</button></div>`;
+
+  $('certOk').onchange = () => { $('btnProceed').disabled = !$('certOk').checked; };
+  $('btnProceed').onclick = () => {
+    $('credBlock').classList.remove('hide');
+    $('skipInspectRow').classList.add('hide');
+    // a cluster-internal CA is normal; keep skip-verify on but say why
+    $('insecure').checked = !d.trusted;
+    $('insecureHint').innerHTML = d.trusted
+      ? '<span class="ok">Certificate validates against the system CA bundle, so verification stays on.</span>'
+      : '<span class="dim">Left on: this certificate is signed by a cluster-internal CA, which the system bundle cannot validate. You confirmed the fingerprint above.</span>';
+    $('username').focus();
+    $('credBlock').scrollIntoView({ behavior: 'smooth' });
+  };
+}
+
 $('btnLogin').onclick = async () => {
   const btn = $('btnLogin');
   btn.disabled = true; btn.textContent = 'Connecting...';
