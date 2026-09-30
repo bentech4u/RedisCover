@@ -618,7 +618,19 @@
         </div>
       </div>
 
-      <div id="tTiers" style="margin-top:18px"></div>
+      <div class="grid g2" style="margin-top:14px">
+          <div class="field">
+            <label>Test client image <span class="dim">(optional)</span></label>
+            <input id="tClientImage" placeholder="reuses the release&apos;s own image">
+            <div class="hint" id="tImageHint">Tests run from a throwaway pod, which needs
+              <span class="mono">redis-cli</span>. By default it reuses the image the release is
+              already running &mdash; demonstrably pullable on this cluster, and the client
+              version matches the server. Override for a disconnected cluster or an internal
+              mirror.</div>
+          </div>
+        </div>
+
+        <div id="tTiers" style="margin-top:18px"></div>
 
       <div id="tDanger"></div>
       <div class="row">

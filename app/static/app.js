@@ -1348,6 +1348,13 @@ async function pickTestTarget(r) {
   renderTests();
   $('tClientNs').value = '';
   $('tPassword').value = '';
+  $('tClientImage').value = '';
+  $('tImageHint').innerHTML = r.version
+    ? `Defaults to this release's own image: <span class="mono">${r.version}</span> &mdash;
+       demonstrably pullable here, and <span class="mono">redis-cli</span> matches the server.
+       Override for a disconnected cluster or an internal mirror.`
+    : `Tests run from a throwaway pod that needs <span class="mono">redis-cli</span>.
+       Override if this cluster cannot reach <span class="mono">docker.io</span>.`;
   $('tClientHint').textContent =
     'Leave blank to use the first namespace the NetworkPolicy allows, so the real path is exercised.';
   $('tSelectCard').classList.remove('hide');
@@ -1444,6 +1451,7 @@ $('tRun').onclick = async () => {
       kind: TTARGET.kind, namespace: TTARGET.namespace, name: TTARGET.name,
       topology: TTARGET.topology || null,
       password: $('tPassword').value || null,
+      client_image: $('tClientImage').value.trim() || null,
       tests, client_namespace: $('tClientNs').value.trim() || null,
       confirm_disruptive: disruptive.length > 0,
     }),

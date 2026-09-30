@@ -164,6 +164,7 @@ class TestRunSpec(BaseModel):
     # Opstree releases are identified by CR kind as well as name
     topology: Optional[str] = None
     password: Optional[str] = None      # override when the Secret cannot be read
+    client_image: Optional[str] = None  # for clusters that cannot reach docker.io
     tests: list[str] = []
     client_namespace: Optional[str] = None
     confirm_disruptive: bool = False

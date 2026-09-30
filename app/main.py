@@ -347,7 +347,8 @@ def _run_suite(job, kubeconfig: str, spec: TestRunSpec):
     result = redistests.run_suite(job, kubeconfig, spec.kind, spec.namespace,
                                   spec.name, spec.tests, spec.client_namespace or "",
                                   topology=spec.topology or "",
-                                  password=spec.password or "")
+                                  password=spec.password or "",
+                                  client_image=spec.client_image or "")
     job.result.update(result)
     if result.get("failed"):
         raise RuntimeError(f"{result['counts']['fail']} test(s) failed")
@@ -366,7 +367,8 @@ def _analyze(job, kubeconfig: str, spec: TestRunSpec):
     job.step(1, 2, "Locating a pod to read from")
     t = redistests.resolve_target(kubeconfig, spec.kind, spec.namespace, spec.name,
                                   log=job.log, topology=spec.topology or "",
-                                  password=spec.password or "")
+                                  password=spec.password or "",
+                                  client_image=spec.client_image or "")
     pod = t.primary or (t.pods[0] if t.pods else "")
     if not pod:
         raise RuntimeError("no running pod found")

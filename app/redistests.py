@@ -21,7 +21,10 @@ from typing import Any, Callable, Optional
 from . import ocp
 
 SCRATCH = "__redisdeployer:test"
-CLIENT_IMAGE = "docker.io/redis:7.4-alpine"
+# Last-resort default only. The client normally reuses the TARGET RELEASE'S OWN
+# image: it is already running on this cluster so it is certainly pullable, it
+# needs no access to docker.io, and redis-cli then matches the server version.
+FALLBACK_CLIENT_IMAGE = "docker.io/redis:7.4-alpine"
 
 
 # ---------------------------------------------------------------- target
@@ -40,6 +43,7 @@ class Target:
     primary: str = ""
     replicas: list[str] = field(default_factory=list)
     workload: str = "deployment"
+    image: str = ""
     sentinel_host: str = ""
     sentinel_port: int = 26379
     master_group: str = "myMaster"
@@ -142,6 +146,11 @@ def resolve_target(kubeconfig: str, kind: str, namespace: str, name: str,
         elif role in ("slave", "replica"):
             t.replicas.append(pod)
 
+    if t.pods:
+        t.image = ocp.jsonpath(
+            kubeconfig, ["get", "pod", t.pods[0], "-n", namespace],
+            "{.spec.containers[0].image}")
+
     if password:
         t.password = password
         if log:
@@ -194,20 +203,42 @@ def _role_of(kubeconfig: str, ns: str, pod: str, password: str) -> str:
 class Client:
     """A throwaway pod that runs redis-cli from inside the cluster."""
 
-    def __init__(self, kubeconfig: str, namespace: str, log):
+    def __init__(self, kubeconfig: str, namespace: str, log, image: str = ""):
         self.kc = kubeconfig
         self.ns = namespace
         self.log = log
+        self.image = image or FALLBACK_CLIENT_IMAGE
         self.pod = f"redis-test-{int(time.time()) % 100000}"
 
     def start(self) -> None:
         self.log(f"  starting test client pod {self.ns}/{self.pod}")
-        ocp.run(self.kc, ["run", self.pod, "-n", self.ns, "--image", CLIENT_IMAGE,
-                          "--restart=Never", "--command", "--", "sleep", "3600"],
-                timeout=90)
-        ocp.wait_for(self.kc, ["get", "pod", self.pod, "-n", self.ns],
-                     "{.status.phase}", "Running", timeout=180,
-                     label="test client", log=None)
+        self.log(f"  image: {self.image}")
+        p = ocp.run(self.kc, ["run", self.pod, "-n", self.ns, "--image", self.image,
+                              "--restart=Never", "--command", "--", "sleep", "3600"],
+                    check=False, timeout=90)
+        if p.returncode != 0:
+            raise RuntimeError(
+                f"could not create the test client pod: "
+                f"{(p.stderr or p.stdout or '').strip()[:200]}")
+        try:
+            ocp.wait_for(self.kc, ["get", "pod", self.pod, "-n", self.ns],
+                         "{.status.phase}", "Running", timeout=180,
+                         label="test client", log=None)
+        except TimeoutError:
+            reason = ocp.jsonpath(
+                self.kc, ["get", "pod", self.pod, "-n", self.ns],
+                "{.status.containerStatuses[0].state.waiting.reason}")
+            msg = ocp.jsonpath(
+                self.kc, ["get", "pod", self.pod, "-n", self.ns],
+                "{.status.containerStatuses[0].state.waiting.message}")
+            hint = ""
+            if "ImagePull" in (reason or "") or "Err" in (reason or ""):
+                hint = (f" -- this cluster cannot pull '{self.image}'. On a restricted "
+                        "or disconnected cluster, set a client image from a registry it "
+                        "can reach (the 'Test client image' field).")
+            raise RuntimeError(
+                f"the test client pod never started ({reason or 'unknown'}){hint}"
+                + (f"\n  {msg}" if msg else ""))
 
     def stop(self) -> None:
         ocp.run(self.kc, ["delete", "pod", self.pod, "-n", self.ns,
@@ -816,7 +847,8 @@ class Ctx:
 
 def run_suite(job, kubeconfig: str, kind: str, namespace: str, name: str,
               test_ids: list[str], client_ns: str = "",
-              topology: str = "", password: str = "") -> dict:
+              topology: str = "", password: str = "",
+              client_image: str = "") -> dict:
     job.log(f"Testing {kind} release {namespace}/{name}"
             + (f" ({topology})" if topology else ""))
     job.step(1, 4, "Resolving the target")
@@ -841,7 +873,12 @@ def run_suite(job, kubeconfig: str, kind: str, namespace: str, name: str,
         if t.allowed_ns:
             job.log(f"  running the test client from '{client_ns}' so the real "
                     "network path (including the NetworkPolicy) is exercised")
-    client = Client(kubeconfig, client_ns, job.log)
+    # reuse the release's own image unless told otherwise: it is demonstrably
+    # pullable here, and redis-cli then matches the server version
+    image = client_image or t.image or FALLBACK_CLIENT_IMAGE
+    if not client_image and t.image:
+        job.log(f"  test client will reuse the release's image ({t.image})")
+    client = Client(kubeconfig, client_ns, job.log, image=image)
     client.start()
     try:
         ctx = Ctx(kubeconfig, t, client, job.log)
