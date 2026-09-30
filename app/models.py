@@ -12,7 +12,14 @@ class LoginRequest(BaseModel):
     insecure: bool = True
 
 
+class MirrorSettings(BaseModel):
+    registry: str = ""
+    mode: Literal["replace", "prefix"] = "replace"
+
+
 class CommunitySpec(BaseModel):
+    mirror: Optional[MirrorSettings] = None
+
     namespace: str = Field(default="redis", pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
     name: str = Field(default="redis", pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 
@@ -115,6 +122,8 @@ class OperatorInstallSpec(BaseModel):
 
 
 class OpstreeSpec(BaseModel):
+    mirror: Optional[MirrorSettings] = None
+
     namespace: str = Field(default="redis-ot", pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
     name: str = Field(default="redis", pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 
@@ -168,3 +177,15 @@ class TestRunSpec(BaseModel):
     tests: list[str] = []
     client_namespace: Optional[str] = None
     confirm_disruptive: bool = False
+
+
+class Day2Spec(BaseModel):
+    operation: Literal["scale", "storage", "image"]
+    kind: Literal["community", "opstree", "enterprise"]
+    namespace: str
+    name: str
+    cr_plural: Optional[str] = None
+    replicas: int = 3
+    storage_size: str = "10Gi"
+    image: Optional[str] = None
+    force: bool = False

@@ -13,7 +13,8 @@ import json
 from typing import Any
 
 from . import ocp
-from .catalog import OPSTREE_GROUP, OPSTREE_VERSIONS, opstree_topology
+from .catalog import (OPSTREE_GROUP, OPSTREE_VERSIONS, apply_mirror,
+                      opstree_topology)
 from .models import OpstreeSpec
 
 API_VERSION = f"{OPSTREE_GROUP}/v1beta2"
@@ -29,7 +30,9 @@ def image_for(spec: OpstreeSpec) -> str:
     base = next((v["image"] for v in OPSTREE_VERSIONS if v["id"] == spec.version_id),
                 OPSTREE_VERSIONS[0]["image"])
     if spec.topology == "sentinel":
-        return base.replace("/opstree/redis:", "/opstree/redis-sentinel:")
+        base = base.replace("/opstree/redis:", "/opstree/redis-sentinel:")
+    if spec.mirror and spec.mirror.registry:
+        base = apply_mirror(base, spec.mirror.registry, spec.mirror.mode)
     return base
 
 

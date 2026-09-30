@@ -175,3 +175,39 @@ def opstree_topology(tid: str) -> dict | None:
         if t["id"] == tid:
             return t
     return None
+
+
+# ---------------------------------------------------------------- registry mirror
+
+def apply_mirror(image: str, mirror: str, mode: str = "replace") -> str:
+    """Rewrite an image reference through an internal mirror.
+
+    Two conventions, because registries disagree:
+
+      replace   docker.io/redis:8.2-alpine  ->  mirror.corp/redis:8.2-alpine
+                the mirror hosts the repository at its own root
+
+      prefix    docker.io/redis:8.2-alpine  ->  mirror.corp/docker.io/redis:8.2-alpine
+                the mirror namespaces by upstream registry (Harbor proxy caches
+                and Artifactory remote repos usually work this way)
+
+    On OpenShift the cluster-level mechanism is ImageDigestMirrorSet, which
+    rewrites transparently and is preferable. This is for clusters that do not
+    have one configured.
+    """
+    if not mirror or not image:
+        return image
+    mirror = mirror.rstrip("/")
+
+    # A registry is only present when there is a "/" AND the first segment
+    # looks like a host. Without the "/" check, the tag's colon in
+    # "redis:7.4-alpine" reads as a host:port.
+    first, _, rest = image.partition("/")
+    has_registry = bool(rest) and ("." in first or ":" in first
+                                   or first == "localhost")
+    registry = first if has_registry else "docker.io"
+    path = rest if has_registry else image
+
+    if mode == "prefix":
+        return f"{mirror}/{registry}/{path}"
+    return f"{mirror}/{path}"

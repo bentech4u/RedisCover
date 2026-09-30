@@ -200,7 +200,7 @@ document.querySelectorAll('.tab').forEach(t => {
   t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
-    ['deploy', 'cluster', 'sizing', 'operators', 'tests', 'status', 'uninstall'].forEach(n => {
+    ['deploy', 'cluster', 'sizing', 'day2', 'operators', 'tests', 'status', 'uninstall'].forEach(n => {
       $('tab' + n[0].toUpperCase() + n.slice(1)).classList.toggle('hide', n !== t.dataset.tab);
     });
   };
@@ -370,6 +370,7 @@ function communitySpec() {
     service_type: $('cServiceType').value,
     node_port: parseInt($('cNodePort').value) || null,
     allow_namespaces: nsPicked('cAllowNs'),
+    mirror: mirrorSettings(),
   };
   return s;
 }
@@ -1364,6 +1365,7 @@ function opstreeSpec() {
     sentinel_auth_pass: $('otAuthPass').checked,
     install_operator: $('otInstallOp').checked,
     allow_namespaces: nsPicked('otAllowNs'),
+    mirror: mirrorSettings(),
   };
 }
 
@@ -1946,3 +1948,112 @@ replica-serve-stale-data no`,
     box.style.height = Math.min(320, box.scrollHeight) + 'px';
   };
 });
+
+
+/* ------------------------------------------------ registry mirror */
+
+function mirrorSettings() {
+  const reg = $('mirrorReg') ? $('mirrorReg').value.trim() : '';
+  return reg ? { registry: reg, mode: $('mirrorMode').value } : null;
+}
+
+function mirrorPreview(img) {
+  const m = mirrorSettings();
+  if (!m) return img;
+  const [first, ...rest] = img.split('/');
+  const hasReg = rest.length && (first.includes('.') || first.includes(':') || first === 'localhost');
+  const registry = hasReg ? first : 'docker.io';
+  const path = hasReg ? rest.join('/') : img;
+  return m.mode === 'prefix' ? `${m.registry}/${registry}/${path}` : `${m.registry}/${path}`;
+}
+
+function updateMirrorHint() {
+  const ex = 'docker.io/redis:8.2-alpine';
+  $('mirrorHint').innerHTML = mirrorSettings()
+    ? `<span class="mono" style="font-size:11px">${ex}<br>&rarr; ${mirrorPreview(ex)}</span>`
+    : 'Blank = images are used exactly as listed.';
+}
+['mirrorReg', 'mirrorMode'].forEach(id => {
+  const e = $(id); if (e) e.addEventListener('input', updateMirrorHint);
+  if (e) e.addEventListener('change', updateMirrorHint);
+});
+if ($('mirrorHint')) updateMirrorHint();
+
+$('mirrorTest').onclick = async () => {
+  const img = mirrorPreview('docker.io/redis:8.2-alpine');
+  $('mirrorResult').innerHTML =
+    `<div class="alert i">Deploy a test release with this mirror set and watch the log —
+     a pull failure now names the image it could not fetch.
+     Resolved example: <span class="mono">${img}</span></div>`;
+};
+
+/* ------------------------------------------------ day-2 */
+
+let DCUR = null;
+
+document.querySelector('.tab[data-tab="day2"]').addEventListener('click', scanForDay2);
+$('dRefresh').onclick = scanForDay2;
+
+async function scanForDay2() {
+  $('dScanState').innerHTML = '<span class="spin"></span> scanning…';
+  try {
+    const d = await api('/api/discover');
+    RELEASES = d.releases;
+    $('dScanState').textContent =
+      `${RELEASES.length} release(s) · scanned ${new Date().toLocaleTimeString()}`;
+    $('dTable').innerHTML = RELEASES.length
+      ? '<tr><th></th><th>Type</th><th>Namespace / name</th><th>Version</th><th>Status</th></tr>' +
+        RELEASES.map((r, i) => `<tr>
+          <td><input type="radio" name="drel" value="${i}" style="width:auto"></td>
+          <td>${r.kind}${r.cr_kind ? ' <span class="dim">/ ' + r.cr_kind + '</span>' : ''}</td>
+          <td class="mono">${r.namespace}/<strong>${r.name}</strong></td>
+          <td class="mono" style="font-size:11px">${r.version || '-'}</td>
+          <td class="${r.deleting ? 'err' : 'ok'}">${r.status}</td></tr>`).join('')
+      : '<tr><td class="dim">Nothing deployed.</td></tr>';
+    document.querySelectorAll('input[name=drel]').forEach(rb => {
+      rb.onchange = () => pickDay2(RELEASES[parseInt(rb.value)]);
+    });
+  } catch (e) { $('dScanState').innerHTML = `<span class="err">${e.message}</span>`; }
+}
+
+function pickDay2(r) {
+  DCUR = r;
+  $('dTitle').textContent = `${r.namespace}/${r.name}`;
+  $('dImage').value = r.version || '';
+  $('dImageHint').innerHTML = `Currently <span class="mono">${r.version || 'unknown'}</span>.
+    Checked before applying: the cluster must be able to pull it, and a downgrade is refused
+    unless forced &mdash; Redis does not guarantee an older server can read a newer RDB or AOF.`;
+  $('dScaleHint').innerHTML = r.topology === 'standalone'
+    ? 'A standalone release is one pod. Scaling it past 1 would give you independent, unsynchronised copies — use the Replication topology instead.'
+    : 'Removing a replica is immediate. Adding one syncs a full copy from the primary first.';
+  $('dOpCard').classList.remove('hide');
+  $('dOpCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function runDay2(operation, extra, confirmMsg) {
+  if (!DCUR) return;
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  const j = await api('/api/day2', {
+    method: 'POST',
+    body: JSON.stringify({
+      operation, kind: DCUR.kind, namespace: DCUR.namespace, name: DCUR.name,
+      cr_plural: DCUR.cr_plural || null, ...extra,
+    }),
+  });
+  document.querySelector('.tab[data-tab="deploy"]').click();
+  streamJob(j.job_id, () => { RELEASES = []; });
+}
+
+$('dScale').onclick = () => runDay2('scale',
+  { replicas: parseInt($('dReplicas').value) || 1 },
+  `Scale ${DCUR.namespace}/${DCUR.name} to ${$('dReplicas').value} replica(s)?`);
+
+$('dGrow').onclick = () => runDay2('storage',
+  { storage_size: $('dStorage').value.trim() },
+  `Grow every PVC of ${DCUR.namespace}/${DCUR.name} to ${$('dStorage').value}?\n\n` +
+  `This cannot be undone — Kubernetes can grow a volume but never shrink it.`);
+
+$('dBump').onclick = () => runDay2('image',
+  { image: $('dImage').value.trim(), force: $('dForce').checked },
+  `Change ${DCUR.namespace}/${DCUR.name} to ${$('dImage').value}?\n\n` +
+  `The pods will roll. On a replication set the REPLICAS upgrade before the primary.`);

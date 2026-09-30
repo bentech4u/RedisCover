@@ -63,6 +63,7 @@
     <div class="tab active" data-tab="deploy">Deploy</div>
     <div class="tab" data-tab="cluster">Cluster</div>
     <div class="tab" data-tab="sizing">Sizing</div>
+    <div class="tab" data-tab="day2">Day-2</div>
     <div class="tab" data-tab="operators">Operators</div>
     <div class="tab" data-tab="tests">Test</div>
     <div class="tab" data-tab="status">Status</div>
@@ -436,6 +437,31 @@
       <table id="scTable"></table>
       <div class="row"><button class="ghost" id="refreshCluster">Refresh</button></div>
     </section>
+
+    <section class="card">
+      <h2>Registry mirror</h2>
+      <div class="sub">For a cluster that cannot reach Docker Hub or Quay. Every image this app
+        generates is rewritten through the mirror. Applies to the Community and Opstree workload
+        images and the test client.</div>
+      <div class="grid g3">
+        <div class="field"><label>Mirror registry</label>
+          <input id="mirrorReg" placeholder="registry.corp.example.com:5000">
+          <div class="hint">Blank = no rewriting.</div></div>
+        <div class="field"><label>Path convention</label>
+          <select id="mirrorMode">
+            <option value="replace">replace &mdash; mirror hosts the repo at its root</option>
+            <option value="prefix">prefix &mdash; mirror namespaces by upstream registry</option>
+          </select>
+          <div class="hint" id="mirrorHint"></div></div>
+        <div class="field" style="display:flex;align-items:flex-end">
+          <button class="ghost" id="mirrorTest">Test a pull</button></div>
+      </div>
+      <div id="mirrorResult" style="margin-top:12px"></div>
+      <div class="alert i" style="margin-top:12px">On OpenShift the cluster-level mechanism is an
+        <span class="mono">ImageDigestMirrorSet</span>, which rewrites transparently for everything
+        on the cluster and is preferable. Use this when one is not configured. It does
+        <strong>not</strong> affect operator images &mdash; OLM pulls those from the CSV.</div>
+    </section>
   </div>
 
   <!-- ---------- SIZING ---------- -->
@@ -530,6 +556,50 @@
           <div class="hint">Enterprise runs ~12 processes per node, so it reserves more.</div></div>
       </div>
       <div id="rResult" style="margin-top:18px"></div>
+    </section>
+  </div>
+
+  <!-- ---------- DAY-2 ---------- -->
+  <div id="tabDay2" class="hide">
+    <section class="card">
+      <h2>Change a running release</h2>
+      <div class="sub">Targeted changes, without rebuilding. Each one runs the checks that stop it
+        going wrong quietly.</div>
+      <div class="row" style="margin-top:0">
+        <button class="ghost" id="dRefresh">Rescan cluster</button>
+        <span class="dim" id="dScanState"></span>
+      </div>
+      <table id="dTable" style="margin-top:14px"></table>
+    </section>
+
+    <section class="card hide" id="dOpCard">
+      <h2>Operations on <span class="mono" id="dTitle"></span></h2>
+
+      <h3 style="font-size:13px;margin:18px 0 8px">Scale replicas</h3>
+      <div class="grid g3">
+        <div class="field"><label>Replicas</label><input id="dReplicas" type="number" min="1" max="9" value="3">
+          <div class="hint" id="dScaleHint"></div></div>
+        <div class="field" style="display:flex;align-items:flex-end"><button id="dScale">Scale</button></div>
+      </div>
+
+      <h3 style="font-size:13px;margin:22px 0 8px">Grow storage</h3>
+      <div class="grid g3">
+        <div class="field"><label>New size per volume</label><input id="dStorage" value="10Gi">
+          <div class="hint">Kubernetes can only grow a volume, never shrink it, and only when the
+            StorageClass allows expansion.</div></div>
+        <div class="field" style="display:flex;align-items:flex-end"><button id="dGrow">Grow</button></div>
+      </div>
+
+      <h3 style="font-size:13px;margin:22px 0 8px">Change image</h3>
+      <div class="grid g3">
+        <div class="field" style="grid-column:1/3"><label>New image</label>
+          <input id="dImage" placeholder="docker.io/redis:8.2-alpine">
+          <div class="hint" id="dImageHint">Checked before it is applied: the cluster must be able
+            to pull it, and a downgrade is refused unless forced.</div></div>
+        <div class="field" style="display:flex;align-items:flex-end;gap:8px">
+          <button id="dBump">Change</button>
+          <label class="chk" style="font-size:11.5px"><input type="checkbox" id="dForce"> force</label></div>
+      </div>
     </section>
   </div>
 

@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from .catalog import community_version
+from .catalog import apply_mirror, community_version
 from .models import CommunitySpec, EnterpriseSpec, OperatorInstallSpec
 
 
@@ -101,6 +101,8 @@ def community_manifests(spec: CommunitySpec, password: str) -> list[dict]:
 def _community_standalone(spec: CommunitySpec, password: str) -> list[dict]:
     v = community_version(spec.version_id) or {}
     image = spec.custom_image or v.get("image") or "docker.io/redis:7.4-alpine"
+    if spec.mirror and spec.mirror.registry:
+        image = apply_mirror(image, spec.mirror.registry, spec.mirror.mode)
     name = spec.name
     ns = spec.namespace
     labels = {"app": name, "app.kubernetes.io/name": name,
@@ -474,6 +476,8 @@ def community_replication_manifests(spec: CommunitySpec, password: str) -> list[
     """
     v = community_version(spec.version_id) or {}
     image = spec.custom_image or v.get("image") or "docker.io/redis:7.4-alpine"
+    if spec.mirror and spec.mirror.registry:
+        image = apply_mirror(image, spec.mirror.registry, spec.mirror.mode)
     name, ns = spec.name, spec.namespace
     headless = f"{name}-headless"
     labels = {"app": name, "app.kubernetes.io/name": name,
