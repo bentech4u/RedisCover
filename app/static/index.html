@@ -294,13 +294,13 @@
         <div class="field"><label>Memory limit <span class="dim">(container ceiling)</span></label>
           <input id="otMemLim" value="512Mi">
           <div class="hint" id="otLimitHint"></div></div>
-        <div class="field" style="display:flex;align-items:flex-end">
-          <label class="chk"><input type="checkbox" id="otInstallOp" checked> Install the operator if missing</label>
-        </div>
         <div class="field"><label>Restrict access to namespaces</label>
           <div class="nspick" id="otAllowNs"></div></div>
       </div>
 
+      <div class="actions" style="margin-top:6px">
+        <label class="chk"><input type="checkbox" id="otInstallOp" checked> Install the operator if missing</label>
+      </div>
       <div class="row">
         <button id="otPreview" class="ghost">Preview YAML</button>
         <button id="otDeploy">Deploy</button>
@@ -673,13 +673,11 @@
       </div>
       <div class="grid g3" style="margin-top:14px">
         <div class="field"><label>Category</label><select id="opCategory"><option value="">Any category</option></select></div>
-        <div class="field" style="display:flex;align-items:flex-end">
-          <label class="chk"><input type="checkbox" id="opCertified"> Certified only</label>
-        </div>
-        <div class="field" style="display:flex;align-items:flex-end;gap:8px">
-          <button class="ghost" id="opRefresh">Refresh catalog</button>
-          <span class="dim" id="opCount"></span>
-        </div>
+      </div>
+      <div class="actions">
+        <label class="chk"><input type="checkbox" id="opCertified"> Certified only</label>
+        <button class="ghost" id="opRefresh">Refresh catalog</button>
+        <span class="dim" id="opCount"></span>
       </div>
       <table id="opTable" style="margin-top:16px"></table>
     </section>
@@ -806,8 +804,11 @@
         <button class="ghost" id="sManualToggle" style="padding:6px 12px">Check another namespace</button>
       </div>
       <div id="sManual" class="hide grid g3" style="margin-top:12px">
-        <div class="field"><label>Namespace</label><input id="sNamespace" list="nsList" placeholder="redis"></div>
-        <div class="field" style="display:flex;align-items:flex-end"><button id="sCheck">Check</button></div>
+        <div class="field"><label>Namespace</label>
+          <div class="inline">
+            <input id="sNamespace" list="nsList" placeholder="redis">
+            <button id="sCheck">Check</button>
+          </div></div>
       </div>
     </section>
 
@@ -838,10 +839,11 @@
         <div class="field"><label>Type</label>
           <select id="mKind"><option value="community">Community</option><option value="enterprise">Enterprise</option></select></div>
         <div class="field"><label>Namespace</label><input id="mNamespace" placeholder="redis"></div>
-        <div class="field" style="display:flex;gap:8px;align-items:flex-end">
-          <div style="flex:1"><label>Release name</label><input id="mName" placeholder="redis"></div>
-          <button class="ghost" id="mUse">Use</button>
-        </div>
+        <div class="field"><label>Release name</label>
+          <div class="inline">
+            <input id="mName" placeholder="redis">
+            <button class="ghost" id="mUse">Use</button>
+          </div></div>
       </div>
     </section>
 
