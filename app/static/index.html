@@ -582,11 +582,27 @@
         <div class="field" style="display:flex;align-items:flex-end"><button id="dScale">Scale</button></div>
       </div>
 
-      <h3 style="font-size:13px;margin:22px 0 8px">Grow storage</h3>
+      <h3 style="font-size:13px;margin:22px 0 8px">Change cache size <span class="dim">(RAM)</span></h3>
+      <div class="grid g3">
+        <div class="field"><label>maxmemory &mdash; the actual cache capacity</label>
+          <input id="dMaxmemory" placeholder="e.g. 1gb">
+          <div class="hint" id="dMemHint"></div></div>
+        <div class="field"><label>Container memory limit</label>
+          <input id="dMemLimit" placeholder="leave blank to keep the current limit">
+          <div class="hint" id="dLimitHint">Blank keeps the current ceiling, so the change is
+            applied <strong>live with no restart</strong>. Changing it rolls the pods.</div></div>
+        <div class="field" style="display:flex;align-items:flex-end;gap:8px">
+          <button id="dMem">Apply</button>
+          <label class="chk" style="font-size:11.5px"><input type="checkbox" id="dMemForce"> force</label></div>
+      </div>
+
+      <h3 style="font-size:13px;margin:22px 0 8px">Grow storage <span class="dim">(disk &mdash; not cache)</span></h3>
       <div class="grid g3">
         <div class="field"><label>New size per volume</label><input id="dStorage" value="10Gi">
-          <div class="hint">Kubernetes can only grow a volume, never shrink it, and only when the
-            StorageClass allows expansion.</div></div>
+          <div class="hint">Disk for the AOF/RDB files. This does <strong>not</strong> change cache
+            capacity &mdash; Redis holds data in RAM, so use "Change cache size" above for that.
+            Kubernetes can only grow a volume, never shrink it, and only when the StorageClass
+            allows expansion.</div></div>
         <div class="field" style="display:flex;align-items:flex-end"><button id="dGrow">Grow</button></div>
       </div>
 

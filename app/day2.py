@@ -223,3 +223,169 @@ def bump_image(job, kubeconfig: str, spec: Day2Spec) -> None:
     job.log("  A StatefulSet rolls highest ordinal first, so on a replication set the")
     job.log("  REPLICAS upgrade before the primary. Check INFO replication afterwards.")
     job.result.update({"from": cur, "to": new})
+
+
+# ---------------------------------------------------------------- cache size
+
+def _bytes(v: str) -> float:
+    """Parse both Redis units (256mb) and Kubernetes units (512Mi)."""
+    m = re.match(r"^\s*([\d.]+)\s*([kKmMgG]i?[bB]?)?\s*$", v or "")
+    if not m:
+        return 0.0
+    n = float(m.group(1))
+    u = (m.group(2) or "").lower()
+    if not u:
+        return n
+    if u.startswith("k"):
+        return n * (1024 if "i" in u else 1000)
+    if u.startswith("m"):
+        return n * (1048576 if "i" in u else 1000000)
+    if u.startswith("g"):
+        return n * (1073741824 if "i" in u else 1000000000)
+    return n
+
+
+def _human(b: float) -> str:
+    if b >= 1073741824:
+        return f"{b / 1073741824:.1f}Gi"
+    return f"{b / 1048576:.0f}Mi"
+
+
+def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
+    """Change the CACHE capacity -- which is RAM, not disk.
+
+    Growing a PVC gives the AOF and RDB files more room; it does not let Redis
+    hold one more key. Capacity is `maxmemory`, bounded by the container's
+    memory limit.
+
+    Raising maxmemory INSIDE the existing limit is applied live with CONFIG SET
+    and needs no restart. Raising the limit is a pod spec change, so the pods
+    roll -- and on a replication set the replicas roll before the primary.
+    """
+    ns, name = spec.namespace, spec.name
+    new_mm = spec.maxmemory or ""
+    new_lim = spec.memory_limit or ""
+    if not new_mm and not new_lim:
+        raise RuntimeError("give a new maxmemory, a new container limit, or both")
+
+    job.step(1, 5, "Reading what it has now")
+    if spec.kind == "opstree":
+        plural = spec.cr_plural or "redisreplications"
+        cur_lim = ocp.jsonpath(kubeconfig, ["get", plural, name, "-n", ns],
+                               "{.spec.kubernetesConfig.resources.limits.memory}")
+        cm_name, cm_key = f"{name}-redis-config", "redis-additional.conf"
+    else:
+        kind, _ = _workload(kubeconfig, ns, name)
+        cur_lim = ocp.jsonpath(kubeconfig, ["get", kind, name, "-n", ns],
+                               "{.spec.template.spec.containers[0].resources.limits.memory}")
+        cm_name, cm_key = f"{name}-config", "redis.conf"
+
+    pod = ocp.jsonpath(kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
+                       "{.items[0].metadata.name}")
+    pw = ""
+    for sname, key in ((f"{name}-auth", "redis-password"), (f"{name}-auth", "password")):
+        raw = ocp.run(kubeconfig, ["get", "secret", sname, "-n", ns, "-o",
+                                   f"jsonpath={{.data.{key}}}"],
+                      check=False, timeout=30).stdout.strip()
+        if raw:
+            import base64 as _b
+            pw = _b.b64decode(raw).decode()
+            break
+    auth = ["-a", pw, "--no-auth-warning"] if pw else []
+    cur_mm = ""
+    if pod:
+        out = ocp.run(kubeconfig, ["exec", "-n", ns, pod, "--", "redis-cli", *auth,
+                                   "CONFIG", "GET", "maxmemory"],
+                      check=False, timeout=45).stdout or ""
+        parts = [l.strip() for l in out.splitlines() if l.strip()]
+        cur_mm = parts[1] if len(parts) > 1 else ""
+
+    job.log(f"  maxmemory (RAM, the cache)  : {_human(_bytes(cur_mm))}"
+            f"  ->  {new_mm or '(unchanged)'}")
+    job.log(f"  container memory limit      : {cur_lim or '?'}"
+            f"  ->  {new_lim or '(unchanged)'}")
+    job.log("  disk (PVC) is NOT involved -- it only holds the AOF/RDB files")
+
+    target_mm = _bytes(new_mm) if new_mm else _bytes(cur_mm)
+    target_lim = _bytes(new_lim) if new_lim else _bytes(cur_lim)
+
+    job.step(2, 5, "Checking the ratio")
+    if target_lim and target_mm:
+        pct = target_mm / target_lim * 100
+        job.log(f"  maxmemory would be {pct:.0f}% of the container limit")
+        if pct > 80 and not spec.force:
+            raise RuntimeError(
+                f"maxmemory {_human(target_mm)} is {pct:.0f}% of the {_human(target_lim)} "
+                "limit. A BGSAVE forks and copies every page modified during the save, so "
+                "this will be OOMKilled under write load -- a crash, not an eviction. Aim "
+                "for 50-70%, or tick force.")
+        if pct > 70:
+            job.log("  WARNING: above the 50-70% safe band")
+
+    limit_changes = bool(new_lim) and _bytes(new_lim) != _bytes(cur_lim)
+    if limit_changes:
+        job.step(3, 5, "Checking a node can hold it")
+        for n in ocp.schedulable_nodes(kubeconfig):
+            alloc = _bytes((n.get("memory") or "0").replace("Ki", "Ki"))
+            job.log(f"    {n['name']:36s} allocatable {n.get('memory')}")
+        job.log("  (compare the new limit against the free memory on the Cluster tab)")
+    else:
+        job.step(3, 5, "Limit unchanged -- no pod restart needed")
+
+    job.step(4, 5, "Persisting the new maxmemory in the ConfigMap")
+    if new_mm:
+        cur_cm = ocp.run(kubeconfig, ["get", "cm", cm_name, "-n", ns, "-o",
+                                      f"jsonpath={{.data['{cm_key.replace('.', chr(92) + '.')}']}}"],
+                         check=False, timeout=45).stdout
+        if cur_cm:
+            if re.search(r"^maxmemory\s+\S+", cur_cm, re.M):
+                updated = re.sub(r"^maxmemory\s+\S+", f"maxmemory {new_mm}",
+                                 cur_cm, flags=re.M)
+            else:
+                updated = cur_cm.rstrip() + f"\nmaxmemory {new_mm}\n"
+            import json as _j
+            patch = _j.dumps({"data": {cm_key: updated}})
+            ocp.run(kubeconfig, ["patch", "cm", cm_name, "-n", ns, "--type", "merge",
+                                 "-p", patch], log=job.log, timeout=90)
+            job.log("  ConfigMap updated, so the value survives a restart")
+        else:
+            job.log(f"  WARNING: could not read ConfigMap {cm_name}; the live change "
+                    "below will be lost on restart")
+
+    job.step(5, 5, "Applying")
+    if limit_changes:
+        if spec.kind == "opstree":
+            import json as _j
+            patch = _j.dumps({"spec": {"kubernetesConfig": {"resources": {
+                "limits": {"memory": new_lim},
+                "requests": {"memory": new_lim}}}}})
+            ocp.run(kubeconfig, ["patch", plural, name, "-n", ns, "--type", "merge",
+                                 "-p", patch], log=job.log, timeout=90)
+            job.log("  the operator rolls the pods")
+        else:
+            ocp.run(kubeconfig, ["set", "resources", f"{kind}/{name}", "-n", ns,
+                                 f"--limits=memory={new_lim}",
+                                 f"--requests=memory={new_lim}"],
+                    log=job.log, timeout=90)
+            ocp.run(kubeconfig, ["rollout", "status", f"{kind}/{name}", "-n", ns,
+                                 "--timeout=900s"], check=False, timeout=960, log=job.log)
+        job.log("")
+        job.log("  requests were set equal to limits -- QoS class Guaranteed, evicted last")
+    elif new_mm:
+        # no pod spec change: apply it live, every pod, zero downtime
+        pods = (ocp.jsonpath(kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
+                             '{range .items[*]}{.metadata.name}{" "}{end}') or "").split()
+        for p in pods:
+            r = ocp.run(kubeconfig, ["exec", "-n", ns, p, "--", "redis-cli", *auth,
+                                     "CONFIG", "SET", "maxmemory", new_mm],
+                        check=False, timeout=45)
+            ok = "OK" in (r.stdout or "")
+            job.log(f"  {p}: CONFIG SET maxmemory {new_mm} -> {'OK' if ok else r.stdout.strip()}")
+        job.log("")
+        job.log("  applied live, no restart, no downtime")
+        if _bytes(new_mm) < _bytes(cur_mm):
+            job.log("  NOTE: you LOWERED maxmemory. Redis will evict immediately to fit,")
+            job.log("  under the current policy, until it is back under the new ceiling.")
+
+    job.result.update({"maxmemory": new_mm or cur_mm, "memory_limit": new_lim or cur_lim,
+                       "restarted": limit_changes})

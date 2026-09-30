@@ -180,7 +180,7 @@ class TestRunSpec(BaseModel):
 
 
 class Day2Spec(BaseModel):
-    operation: Literal["scale", "storage", "image"]
+    operation: Literal["scale", "storage", "image", "memory"]
     kind: Literal["community", "opstree", "enterprise"]
     namespace: str
     name: str
@@ -188,4 +188,6 @@ class Day2Spec(BaseModel):
     replicas: int = 3
     storage_size: str = "10Gi"
     image: Optional[str] = None
+    maxmemory: Optional[str] = None      # RAM -- the actual cache capacity
+    memory_limit: Optional[str] = None   # container ceiling
     force: bool = False

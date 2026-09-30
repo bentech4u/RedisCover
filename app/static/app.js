@@ -2026,6 +2026,18 @@ function pickDay2(r) {
   $('dScaleHint').innerHTML = r.topology === 'standalone'
     ? 'A standalone release is one pod. Scaling it past 1 would give you independent, unsynchronised copies — use the Replication topology instead.'
     : 'Removing a replica is immediate. Adding one syncs a full copy from the primary first.';
+  $('dMaxmemory').value = '';
+  $('dMemLimit').value = '';
+  $('dMemHint').innerHTML = 'RAM. Growing the PVC does not change this &mdash; disk only holds the AOF/RDB files.';
+  api('/api/status?namespace=' + encodeURIComponent(r.namespace) + '&name=' + encodeURIComponent(r.name))
+    .then(st => {
+      const L = st.live || {};
+      if (L.maxmemory) {
+        $('dMemHint').innerHTML = `Currently <span class="mono">${L.maxmemory}</span> of cache,
+          <span class="mono">${L.used_memory}</span> in use, policy <span class="mono">${L.maxmemory_policy}</span>.
+          RAM only &mdash; the PVC does not affect it.`;
+      }
+    }).catch(() => {});
   $('dOpCard').classList.remove('hide');
   $('dOpCard').scrollIntoView({ behavior: 'smooth' });
 }
@@ -2057,3 +2069,15 @@ $('dBump').onclick = () => runDay2('image',
   { image: $('dImage').value.trim(), force: $('dForce').checked },
   `Change ${DCUR.namespace}/${DCUR.name} to ${$('dImage').value}?\n\n` +
   `The pods will roll. On a replication set the REPLICAS upgrade before the primary.`);
+
+
+$('dMem').onclick = () => {
+  const mm = $('dMaxmemory').value.trim(), lim = $('dMemLimit').value.trim();
+  if (!mm && !lim) return alert('Give a new maxmemory, a new container limit, or both.');
+  let msg = `Change cache size on ${DCUR.namespace}/${DCUR.name}?\n\n`;
+  msg += mm ? `maxmemory -> ${mm}\n` : '';
+  msg += lim ? `container limit -> ${lim}\n\nChanging the limit is a pod spec change, so the pods WILL ROLL.`
+             : `\nThe container limit is unchanged, so this applies live with no restart.`;
+  runDay2('memory', { maxmemory: mm || null, memory_limit: lim || null,
+                      force: $('dMemForce').checked }, msg);
+};

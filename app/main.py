@@ -412,7 +412,7 @@ def _analyze(job, kubeconfig: str, spec: TestRunSpec):
 def day2(spec: Day2Spec, sid: Optional[str] = Cookie(None)):
     s = _session(sid)
     fn = {"scale": day2ops.scale, "storage": day2ops.grow_storage,
-          "image": day2ops.bump_image}[spec.operation]
+          "image": day2ops.bump_image, "memory": day2ops.change_memory}[spec.operation]
     job = deploy.new_job(f"day2-{spec.operation}")
     deploy.run_in_thread(job, fn, s["kubeconfig"], spec)
     return {"job_id": job.id}
