@@ -439,3 +439,145 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
 
     job.result.update({"maxmemory": new_mm or cur_mm, "memory_limit": new_lim or cur_lim,
                        "restarted": spec_changes})
+
+
+# ---------------------------------------------------------------- ACL users
+
+def list_users(kubeconfig: str, ns: str, name: str) -> list[dict]:
+    """Read the ACL as the server sees it, not as the manifest claims."""
+    pod = ocp.jsonpath(kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
+                       "{.items[0].metadata.name}")
+    if not pod:
+        return []
+    pw = ""
+    for sname, key in ((f"{name}-auth", "redis-password"), (f"{name}-auth", "password")):
+        raw = ocp.run(kubeconfig, ["get", "secret", sname, "-n", ns, "-o",
+                                   f"jsonpath={{.data.{key}}}"],
+                      check=False, timeout=30).stdout.strip()
+        if raw:
+            import base64 as _b
+            pw = _b.b64decode(raw).decode()
+            break
+    auth = ["-a", pw, "--no-auth-warning"] if pw else []
+    out = ocp.run(kubeconfig, ["exec", "-n", ns, pod, "--", "redis-cli", *auth,
+                               "ACL", "LIST"], check=False, timeout=45).stdout or ""
+    users = []
+    for line in out.splitlines():
+        if not line.startswith("user "):
+            continue
+        parts = line.split()
+        users.append({
+            "username": parts[1],
+            "enabled": "on" in parts[2:4],
+            "keys": " ".join(p for p in parts if p.startswith("~")) or "(none)",
+            "channels": ("&*" if "&*" in parts else
+                         "none" if "resetchannels" in parts else
+                         " ".join(p for p in parts if p.startswith("&")) or "(none)"),
+            "commands": " ".join(p for p in parts if p.startswith(("+", "-"))),
+            "raw": line,
+        })
+    return users
+
+
+def manage_acl(job, kubeconfig: str, spec: Day2Spec) -> None:
+    """Create, delete or re-password an ACL user.
+
+    Applied twice on purpose: live with ACL SETUSER so it takes effect at once,
+    and into the ConfigMap so it survives a restart. A runtime-only ACL change
+    is lost the moment the pod is recreated, which is the kind of thing nobody
+    notices until an unrelated rollout.
+    """
+    ns, name = spec.namespace, spec.name
+    action = spec.acl_action or "create"
+    u = spec.user
+    if not u:
+        raise RuntimeError("no user given")
+    if u.username == "default":
+        raise RuntimeError(
+            "'default' is the admin account that requirepass sets and that the "
+            "health probes authenticate as. Changing it here would lock out the "
+            "readiness probe. Use the cache/resources section to change its password.")
+
+    from .catalog import acl_line
+    job.step(1, 4, f"{action} user '{u.username}'")
+    pods = (ocp.jsonpath(kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
+                         '{range .items[*]}{.metadata.name}{" "}{end}') or "").split()
+    if not pods:
+        raise RuntimeError(f"no pods found for '{name}' in '{ns}'")
+    pw = ""
+    for sname, key in ((f"{name}-auth", "redis-password"), (f"{name}-auth", "password")):
+        raw = ocp.run(kubeconfig, ["get", "secret", sname, "-n", ns, "-o",
+                                   f"jsonpath={{.data.{key}}}"],
+                      check=False, timeout=30).stdout.strip()
+        if raw:
+            import base64 as _b
+            pw = _b.b64decode(raw).decode()
+            break
+    auth = ["-a", pw, "--no-auth-warning"] if pw else []
+
+    if action in ("create", "password") and not u.password:
+        from .manifests import gen_password
+        u.password = gen_password()
+
+    line = acl_line(u.username, u.password or "", u.key_pattern, u.permissions,
+                    u.channels, u.enabled)
+    shown = line.replace(u.password, "********") if u.password else line
+    job.log("  " + shown)
+
+    job.step(2, 4, "Applying to every running pod")
+    for p in pods:
+        if action == "delete":
+            cmd = ["ACL", "DELUSER", u.username]
+        else:
+            cmd = ["ACL", "SETUSER"] + line.split()[1:]
+        r = ocp.run(kubeconfig, ["exec", "-n", ns, p, "--", "redis-cli", *auth, *cmd],
+                    check=False, timeout=45)
+        res = ((r.stdout or "") + (r.stderr or "")).strip()
+        job.log(f"  {p}: {res[:90]}")
+        if "ERR" in res or "WRONGPASS" in res:
+            raise RuntimeError(f"{p} rejected the change: {res[:160]}")
+
+    job.step(3, 4, "Persisting to the ConfigMap so it survives a restart")
+    cm = f"{name}-config"
+    cur = ocp.run(kubeconfig, ["get", "cm", cm, "-n", ns, "-o",
+                               "jsonpath={.data.redis\\.conf}"],
+                  check=False, timeout=45).stdout
+    if cur:
+        kept = [l for l in cur.splitlines()
+                if not re.match(rf"^user\s+{re.escape(u.username)}\s", l)]
+        if action != "delete":
+            kept.append(line)
+        import json as _j
+        ocp.run(kubeconfig, ["patch", "cm", cm, "-n", ns, "--type", "merge",
+                             "-p", _j.dumps({"data": {"redis.conf": "\n".join(kept) + "\n"}})],
+                log=job.log, timeout=90)
+    else:
+        job.log(f"  WARNING: could not read ConfigMap {cm}; this change will be LOST "
+                "when a pod restarts")
+
+    job.step(4, 4, "Credential Secret")
+    sec = f"{name}-user-{u.username}"
+    if action == "delete":
+        ocp.run(kubeconfig, ["delete", "secret", sec, "-n", ns, "--ignore-not-found"],
+                check=False, timeout=60, log=job.log)
+    else:
+        import base64 as _b
+        import json as _j
+        body = _j.dumps({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": sec, "namespace": ns,
+                         "labels": {"app": name,
+                                    "app.kubernetes.io/managed-by": "redis-deployer",
+                                    "redis-deployer/acl-user": u.username}},
+            "type": "Opaque",
+            "data": {"username": _b.b64encode(u.username.encode()).decode(),
+                     "password": _b.b64encode((u.password or "").encode()).decode(),
+                     "key-pattern": _b.b64encode(u.key_pattern.encode()).decode()},
+        })
+        ocp.apply_yaml(kubeconfig, body, log=job.log)
+        job.result["user"] = {"username": u.username, "password": u.password,
+                              "secret": sec, "key_pattern": u.key_pattern,
+                              "permissions": u.permissions}
+        job.log("")
+        job.log(f"  give the application Secret '{sec}' in its own namespace --")
+        job.log("  it carries only this user's credential, not the admin password")

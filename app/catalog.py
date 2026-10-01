@@ -211,3 +211,52 @@ def apply_mirror(image: str, mirror: str, mode: str = "replace") -> str:
     if mode == "prefix":
         return f"{mirror}/{registry}/{path}"
     return f"{mirror}/{path}"
+
+
+# ---------------------------------------------------------------- redis ACL
+
+# Verified against redis-server 8.2: a `user` line in redis.conf survives a
+# restart, and the NOPERM errors below are real refusals, not warnings.
+ACL_PRESETS = {
+    "readonly": {
+        "label": "Read-only",
+        "rules": "+@read +@connection -@dangerous",
+        "detail": "GET, MGET, EXISTS, SCAN within its keys. Cannot write, cannot "
+                  "FLUSH, cannot CONFIG.",
+    },
+    "readwrite": {
+        "label": "Read and write (typical application)",
+        "rules": "+@read +@write +@connection +@transaction -@dangerous -@admin",
+        "detail": "Everything an application needs on its own keys. Cannot FLUSHALL, "
+                  "CONFIG SET, SHUTDOWN, DEBUG or read other prefixes.",
+    },
+    "full": {
+        "label": "Full access to its own keys",
+        "rules": "+@all -@admin -@dangerous",
+        "detail": "Scripting and pubsub included, still scoped to its key pattern and "
+                  "still unable to administer the server.",
+    },
+    "admin": {
+        "label": "Administrator (same as default)",
+        "rules": "+@all",
+        "detail": "Every command on every key, including FLUSHALL and SHUTDOWN. "
+                  "Only for an operator account.",
+    },
+}
+
+
+def acl_line(username: str, password: str, key_pattern: str = "*",
+             permissions: str = "readwrite", channels: str = "",
+             enabled: bool = True) -> str:
+    """One redis.conf `user` directive.
+
+    Key patterns need the ~ prefix; several are space separated. An empty
+    channel pattern becomes `resetchannels`, which denies pubsub entirely --
+    safer than the `&*` that would otherwise be inherited.
+    """
+    rules = ACL_PRESETS.get(permissions, ACL_PRESETS["readwrite"])["rules"]
+    keys = " ".join(f"~{k.strip()}" for k in key_pattern.split() if k.strip()) or "~*"
+    chan = (" ".join(f"&{c.strip()}" for c in channels.split() if c.strip())
+            if channels else "resetchannels")
+    state = "on" if enabled else "off"
+    return f"user {username} {state} >{password} {keys} {chan} {rules}"

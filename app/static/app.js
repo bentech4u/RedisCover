@@ -370,6 +370,7 @@ function communitySpec() {
     service_type: $('cServiceType').value,
     node_port: parseInt($('cNodePort').value) || null,
     allow_namespaces: nsPicked('cAllowNs'),
+    users: CUSERS.filter(u => u.username.trim()),
     mirror: mirrorSettings(),
   };
   return s;
@@ -2132,6 +2133,7 @@ function pickDay2(r) {
       $('dScaleHint').textContent = 'Could not read the live values.';
       $('dStorageHint').textContent = 'Could not read the live values.';
     });
+  loadAcl();
   $('dOpCard').classList.remove('hide');
   $('dOpCard').scrollIntoView({ behavior: 'smooth' });
 }
@@ -2218,3 +2220,104 @@ function updateQosHint() {
 ['dMaxmemory', 'dMaxmemoryUnit', 'dMemLimit', 'dMemRequest', 'dCpuRequest', 'dCpuLimit'].forEach(id => {
   const e = $(id); if (e) e.addEventListener('input', updateQosHint);
 });
+
+
+/* ------------------------------------------------ ACL users: deploy form */
+
+let CUSERS = [];
+let ACL_PRESETS = [];
+
+async function loadAclPresets() {
+  if (ACL_PRESETS.length) return;
+  try {
+    const d = await api('/api/acl?namespace=default&name=none');
+    ACL_PRESETS = d.presets || [];
+  } catch { ACL_PRESETS = []; }
+}
+
+function renderCUsers() {
+  const t = $('cUserTable');
+  if (!CUSERS.length) { t.innerHTML = ''; return; }
+  t.innerHTML = '<tr><th>Username</th><th>Key pattern</th><th>Permissions</th><th></th></tr>' +
+    CUSERS.map((u, i) => `<tr>
+      <td><input value="${u.username}" onchange="CUSERS[${i}].username=this.value"></td>
+      <td><input value="${u.key_pattern}" onchange="CUSERS[${i}].key_pattern=this.value"></td>
+      <td><select onchange="CUSERS[${i}].permissions=this.value">
+        ${ACL_PRESETS.map(p => `<option value="${p.id}"${p.id === u.permissions ? ' selected' : ''}>${p.label}</option>`).join('')}
+      </select></td>
+      <td><button class="ghost" style="padding:4px 10px"
+          onclick="CUSERS.splice(${i},1);renderCUsers()">Remove</button></td></tr>`).join('');
+}
+window.CUSERS = CUSERS;
+
+$('cAddUser').onclick = async (e) => {
+  e.preventDefault();
+  await loadAclPresets();
+  CUSERS.push({ username: '', key_pattern: '*', permissions: 'readwrite', channels: '' });
+  window.CUSERS = CUSERS;
+  renderCUsers();
+};
+
+/* ------------------------------------------------ ACL users: day-2 */
+
+async function loadAcl() {
+  if (!DCUR) return;
+  await loadAclPresets();
+  if (!$('aclPerm').innerHTML) {
+    $('aclPerm').innerHTML = ACL_PRESETS.map(p =>
+      `<option value="${p.id}"${p.id === 'readwrite' ? ' selected' : ''}>${p.label}</option>`).join('');
+    $('aclPerm').onchange = () => {
+      const p = ACL_PRESETS.find(x => x.id === $('aclPerm').value);
+      $('aclPermHint').textContent = p ? p.detail : '';
+    };
+    $('aclPerm').onchange();
+  }
+  $('dAclTable').innerHTML = '<tr><td class="dim">reading the ACL…</td></tr>';
+  try {
+    const d = await api(`/api/acl?namespace=${encodeURIComponent(DCUR.namespace)}&name=${encodeURIComponent(DCUR.name)}`);
+    $('dAclTable').innerHTML = d.users.length
+      ? '<tr><th>User</th><th>Enabled</th><th>Keys</th><th>Channels</th><th>Commands</th></tr>' +
+        d.users.map(u => `<tr>
+          <td class="mono">${u.username}${u.username === 'default' ? ' <span class="dim">(admin)</span>' : ''}</td>
+          <td class="${u.enabled ? 'ok' : 'warn'}">${u.enabled ? 'on' : 'off'}</td>
+          <td class="mono" style="font-size:11px">${u.keys}</td>
+          <td class="mono" style="font-size:11px">${u.channels}</td>
+          <td class="mono" style="font-size:11px">${u.commands}</td></tr>`).join('')
+      : '<tr><td class="dim">Could not read the ACL.</td></tr>';
+  } catch (e) {
+    $('dAclTable').innerHTML = `<tr><td class="err">${e.message}</td></tr>`;
+  }
+}
+
+$('aclGen').onclick = async (e) => {
+  e.preventDefault();
+  $('aclPass').value = (await api('/api/genpassword')).password;
+};
+
+function aclSpec() {
+  return {
+    username: $('aclUser').value.trim(),
+    password: $('aclPass').value.trim() || null,
+    key_pattern: $('aclKeys').value.trim() || '*',
+    permissions: $('aclPerm').value,
+    channels: $('aclChannels').value.trim(),
+    enabled: true,
+  };
+}
+
+$('aclCreate').onclick = () => {
+  const u = aclSpec();
+  if (!u.username) return alert('Give the user a name.');
+  runDay2('acl', { acl_action: 'create', user: u },
+    `Create or update ACL user '${u.username}' on ${DCUR.namespace}/${DCUR.name}?\n\n` +
+    `Keys: ${u.key_pattern}\nPermissions: ${u.permissions}\n\n` +
+    `Applied live and written to the ConfigMap so it survives a restart.`);
+};
+
+$('aclDelete').onclick = () => {
+  const u = aclSpec();
+  if (!u.username) return alert('Give the user a name.');
+  runDay2('acl', { acl_action: 'delete', user: u },
+    `DELETE ACL user '${u.username}'?\n\nAny application using it will start getting ` +
+    `WRONGPASS immediately.`);
+};

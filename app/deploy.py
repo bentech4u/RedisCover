@@ -176,6 +176,16 @@ def deploy_community(job: Job, kubeconfig: str, spec: CommunitySpec) -> None:
                 "change nothing. Delete the StatefulSet and its PVCs first "
                 "(Uninstall tab, tick 'delete PVCs').")
 
+    for u in spec.users:
+        if not u.password:
+            u.password = gen_password()
+    if spec.users:
+        job.log("")
+        job.log("ACL users (each gets its own Secret):")
+        for u in spec.users:
+            job.log(f"  {u.username:16s} keys={u.key_pattern:16s} {u.permissions}")
+        job.log("  'default' keeps the admin password -- these are scoped accounts")
+
     job.step(2, total, "Rendering manifests")
     objs = community_manifests(spec, password)
     yaml_text = dump(objs)
@@ -279,6 +289,11 @@ def deploy_community(job: Job, kubeconfig: str, spec: CommunitySpec) -> None:
 
     domain = ocp.cluster_domain(kubeconfig, spec.namespace, pod, log=job.log)
     host = f"{spec.name}.{spec.namespace}.svc.{domain}"
+    if spec.users:
+        job.result["users"] = [
+            {"username": u.username, "password": u.password,
+             "key_pattern": u.key_pattern, "permissions": u.permissions,
+             "secret": f"{spec.name}-user-{u.username}"} for u in spec.users]
     job.result.update({
         "kind": "community", "namespace": spec.namespace, "name": spec.name,
         "image": image, "host": host, "port": 6379,

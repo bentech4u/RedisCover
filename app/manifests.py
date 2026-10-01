@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from .catalog import apply_mirror, community_version
+from .catalog import acl_line, apply_mirror, community_version
 from .models import CommunitySpec, EnterpriseSpec, OperatorInstallSpec
 
 
@@ -81,6 +81,14 @@ def redis_conf(spec: CommunitySpec) -> str:
         lines.append(f"maxmemory-clients {spec.maxmemory_clients}")
     if spec.io_threads and "io_threads" in feats:
         lines.append(f"io-threads {spec.io_threads}")
+
+    if spec.users:
+        lines += ["", "# --- ACL users ---",
+                  "# `default` keeps requirepass and full access; these are scoped",
+                  "# application accounts. A `user` line here survives a restart."]
+        for u in spec.users:
+            lines.append(acl_line(u.username, u.password or "", u.key_pattern,
+                                  u.permissions, u.channels, u.enabled))
 
     lines += [
         "",
@@ -224,6 +232,8 @@ def _community_standalone(spec: CommunitySpec, password: str) -> list[dict]:
     if spec.service_type == "NodePort" and spec.node_port:
         svc["spec"]["ports"][0]["nodePort"] = spec.node_port
     objs.append(svc)
+
+    objs.extend(user_secrets(spec))
 
     if spec.allow_namespaces:
         objs.append(network_policy(ns, {"app": name}, 6379, spec.allow_namespaces,
@@ -620,3 +630,26 @@ def community_replication_manifests(spec: CommunitySpec, password: str) -> list[
         objs.append(network_policy(ns, {"app": name}, 6379, spec.allow_namespaces,
                                    f"allow-clients-to-{name}"))
     return objs
+
+
+def user_secrets(spec: CommunitySpec) -> list[dict]:
+    """One Secret per ACL user, so each application gets only its own credential."""
+    out = []
+    for u in spec.users:
+        if not u.password:
+            continue
+        out.append({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": f"{spec.name}-user-{u.username}",
+                         "namespace": spec.namespace,
+                         "labels": {"app": spec.name,
+                                    "app.kubernetes.io/managed-by": "redis-deployer",
+                                    "redis-deployer/acl-user": u.username}},
+            "type": "Opaque",
+            "data": {
+                "username": base64.b64encode(u.username.encode()).decode(),
+                "password": base64.b64encode(u.password.encode()).decode(),
+                "key-pattern": base64.b64encode(u.key_pattern.encode()).decode(),
+            },
+        })
+    return out

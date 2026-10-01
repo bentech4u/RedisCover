@@ -212,6 +212,15 @@
         </div>
       </div>
 
+      <h3 style="font-size:13px;margin:22px 0 6px">Application users <span class="dim">(optional)</span></h3>
+      <div class="hint" style="margin-bottom:10px">The password above belongs to Redis's
+        <span class="mono">default</span> user, which has <span class="mono">+@all</span> on every
+        key &mdash; it can <span class="mono">FLUSHALL</span>, <span class="mono">CONFIG SET</span>
+        and <span class="mono">SHUTDOWN</span>. Give each application its own scoped account
+        instead, and keep <span class="mono">default</span> for operators.</div>
+      <table id="cUserTable"></table>
+      <div class="actions"><button class="ghost" id="cAddUser">Add a user</button></div>
+
       <div class="row">
         <button id="cPreview" class="ghost">Preview YAML</button>
         <button id="cDeploy">Deploy</button>
@@ -660,6 +669,35 @@
             <div class="hint" id="dStorageHint">Disk for the AOF/RDB files. This does
               <strong>not</strong> change cache capacity &mdash; use "Change cache size" above.</div>
           </div>
+        </div>
+      </div>
+
+      <div class="opblock">
+        <h3>Application users <span class="dim">&mdash; Redis ACLs</span></h3>
+        <table id="dAclTable"></table>
+        <div class="grid g3" style="margin-top:12px">
+          <div class="field"><label>Username</label>
+            <input id="aclUser" placeholder="t24app"></div>
+          <div class="field"><label>Key pattern</label>
+            <input id="aclKeys" value="*" placeholder="t24:*">
+            <div class="hint">Space-separate several. <span class="mono">*</span> = every key.</div></div>
+          <div class="field"><label>Permissions</label>
+            <select id="aclPerm"></select>
+            <div class="hint" id="aclPermHint"></div></div>
+        </div>
+        <div class="grid g3" style="margin-top:12px">
+          <div class="field"><label>Password</label>
+            <div class="inline">
+              <input id="aclPass" placeholder="leave blank to generate">
+              <button class="ghost" id="aclGen">Gen</button>
+            </div></div>
+          <div class="field"><label>Pub/sub channels</label>
+            <input id="aclChannels" placeholder="blank = no pubsub access">
+            <div class="hint">Blank applies <span class="mono">resetchannels</span>.</div></div>
+        </div>
+        <div class="actions">
+          <button id="aclCreate">Create or update</button>
+          <button class="ghost danger" id="aclDelete">Delete user</button>
         </div>
       </div>
 

@@ -412,7 +412,8 @@ def _analyze(job, kubeconfig: str, spec: TestRunSpec):
 def day2(spec: Day2Spec, sid: Optional[str] = Cookie(None)):
     s = _session(sid)
     fn = {"scale": day2ops.scale, "storage": day2ops.grow_storage,
-          "image": day2ops.bump_image, "memory": day2ops.change_memory}[spec.operation]
+          "image": day2ops.bump_image, "memory": day2ops.change_memory,
+          "acl": day2ops.manage_acl}[spec.operation]
     job = deploy.new_job(f"day2-{spec.operation}")
     deploy.run_in_thread(job, fn, s["kubeconfig"], spec)
     return {"job_id": job.id}
@@ -460,6 +461,14 @@ def mirror_test(payload: dict, sid: Optional[str] = Cookie(None)):
                  "--grace-period=0", "--force"], check=False, timeout=60)
     return {"image": image, "source": src, "ok": ok,
             "reason": reason, "detail": msg[:300] if msg else ""}
+
+
+@app.get("/api/acl")
+def acl_users(namespace: str, name: str, sid: Optional[str] = Cookie(None)):
+    s = _session(sid)
+    from .catalog import ACL_PRESETS
+    return {"users": day2ops.list_users(s["kubeconfig"], namespace, name),
+            "presets": [{"id": k, **v} for k, v in ACL_PRESETS.items()]}
 
 
 @app.get("/api/namespaces")

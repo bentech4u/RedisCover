@@ -12,6 +12,15 @@ class LoginRequest(BaseModel):
     insecure: bool = True
 
 
+class RedisUser(BaseModel):
+    username: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{1,31}$")
+    password: Optional[str] = None            # generated when blank
+    key_pattern: str = "*"                    # e.g. "t24:*"
+    permissions: Literal["readonly", "readwrite", "full", "admin"] = "readwrite"
+    channels: str = ""                        # blank -> resetchannels (no pubsub)
+    enabled: bool = True
+
+
 class MirrorSettings(BaseModel):
     registry: str = ""
     mode: Literal["replace", "prefix"] = "replace"
@@ -57,6 +66,7 @@ class CommunitySpec(BaseModel):
     service_type: Literal["ClusterIP", "NodePort"] = "ClusterIP"
     node_port: Optional[int] = None
     allow_namespaces: list[str] = []          # empty -> no NetworkPolicy
+    users: list[RedisUser] = []               # scoped ACL accounts
 
 
 class EnterpriseSpec(BaseModel):
@@ -180,7 +190,7 @@ class TestRunSpec(BaseModel):
 
 
 class Day2Spec(BaseModel):
-    operation: Literal["scale", "storage", "image", "memory"]
+    operation: Literal["scale", "storage", "image", "memory", "acl"]
     kind: Literal["community", "opstree", "enterprise"]
     namespace: str
     name: str
@@ -193,4 +203,6 @@ class Day2Spec(BaseModel):
     memory_request: Optional[str] = None
     cpu_request: Optional[str] = None
     cpu_limit: Optional[str] = None
+    acl_action: Optional[Literal["create", "delete", "password"]] = None
+    user: Optional[RedisUser] = None
     force: bool = False
