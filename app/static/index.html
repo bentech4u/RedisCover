@@ -160,7 +160,13 @@
           Redis holds data in RAM (maxmemory). Rule of thumb: 3-5x maxmemory.</div></div>
         <div class="field">
           <label>maxmemory <span class="dim">(RAM &mdash; the real capacity)</span></label>
-          <input id="cMaxmemory" value="256mb">
+          <div class="unitpair"><input id="cMaxmemory" type="number" min="1" value="256">
+            <select id="cMaxmemoryUnit">
+                <option value="mb">mb &mdash; 1024&sup2; (= Mi)</option>
+                <option value="gb">gb &mdash; 1024&sup3; (= Gi)</option>
+                <option value="m">m &mdash; 10&#8310; (= M)</option>
+                <option value="g">g &mdash; 10&#8313; (= G)</option>
+              </select></div>
           <div class="hint" id="cMemHint">This is how much data Redis can hold. Keep it below the container memory limit, or the kernel OOM-kills Redis before it can evict.</div>
         </div>
         <div class="field"><label>Eviction policy</label><select id="cEviction"></select></div>
@@ -267,7 +273,13 @@
       <div class="grid g3" style="margin-bottom:16px">
         <div class="field">
           <label>maxmemory <span class="dim">(RAM &mdash; the cache capacity)</span></label>
-          <input id="otMaxmemory" value="256mb">
+          <div class="unitpair"><input id="otMaxmemory" type="number" min="1" value="256">
+            <select id="otMaxmemoryUnit">
+                <option value="mb">mb &mdash; 1024&sup2; (= Mi)</option>
+                <option value="gb">gb &mdash; 1024&sup3; (= Gi)</option>
+                <option value="m">m &mdash; 10&#8310; (= M)</option>
+                <option value="g">g &mdash; 10&#8313; (= G)</option>
+              </select></div>
           <div class="hint" id="otMemHint">How much data Redis can actually hold. Leave it blank
           and Redis is unlimited &mdash; it grows until the container hits its memory limit and
           the kernel OOM-kills it.</div>
@@ -606,7 +618,13 @@
         <div class="grid g2">
           <div class="field">
             <label>maxmemory <span class="dim">&mdash; RAM, the actual cache capacity</span></label>
-            <input id="dMaxmemory" placeholder="loading&hellip;">
+            <div class="unitpair"><input id="dMaxmemory" type="number" min="1" placeholder="&hellip;">
+              <select id="dMaxmemoryUnit">
+                <option value="mb">mb &mdash; 1024&sup2; (= Mi)</option>
+                <option value="gb">gb &mdash; 1024&sup3; (= Gi)</option>
+                <option value="m">m &mdash; 10&#8310; (= M)</option>
+                <option value="g">g &mdash; 10&#8313; (= G)</option>
+              </select></div>
             <div class="hint" id="dMemHint"></div>
           </div>
           <div class="field">

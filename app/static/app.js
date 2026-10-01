@@ -303,7 +303,7 @@ async function loadCommunityVersions() {
     `<option value="${e.value}"${e.value === 'allkeys-lru' ? ' selected' : ''}>${e.label}</option>`).join('');
   $('cPersistence').innerHTML = d.persistence_modes.map(p =>
     `<option value="${p.value}">${p.label}</option>`).join('');
-  ['cMaxmemory', 'cMemLim'].forEach(id => $(id).addEventListener('input', () => checkMem('c')));
+  ['cMaxmemory', 'cMaxmemoryUnit', 'cMemLim'].forEach(id => { const e=$(id); if(e){e.addEventListener('input',()=>checkMem('c')); e.addEventListener('change',()=>checkMem('c'));} });
   checkMem('c');
   $('cVersion').onchange = applyVersionFeatures;
   $('cTopology').onchange = applyCTopology;
@@ -322,7 +322,7 @@ function applyVersionFeatures() {
   document.querySelectorAll('.feat').forEach(el => {
     el.classList.toggle('hide', !v.features.includes(el.dataset.feat));
   });
-  $('cMaxmemory').value = v.defaults.maxmemory;
+  setMaxmem('cMaxmemory', redisBytes(v.defaults.maxmemory));
   $('cMemLim').value = v.defaults.memory_limit;
   $('cCpuLim').value = v.defaults.cpu_limit;
   if (!v.features.includes('multipart_aof')) {
@@ -359,7 +359,7 @@ function communitySpec() {
     storage_class: $('cStorageClass').value || null,
     allow_file_storage: $('cAllowFile').checked,
     storage_size: $('cStorageSize').value.trim(),
-    maxmemory: $('cMaxmemory').value.trim(),
+    maxmemory: maxmemValue('cMaxmemory'),
     maxmemory_policy: $('cEviction').value,
     cpu_request: $('cCpuReq').value.trim(),
     cpu_limit: $('cCpuLim').value.trim(),
@@ -1271,7 +1271,7 @@ async function loadOpstree() {
   $('otEviction').innerHTML = (STATE.community?.eviction_policies || []).map(e =>
     `<option value="${e.value}"${e.value === 'allkeys-lru' ? ' selected' : ''}>${e.label}</option>`).join('')
     || '<option value="allkeys-lru">allkeys-lru</option><option value="noeviction">noeviction</option>';
-  ['otMaxmemory', 'otMemLim'].forEach(id => $(id).addEventListener('input', () => checkMem('ot')));
+  ['otMaxmemory', 'otMaxmemoryUnit', 'otMemLim'].forEach(id => { const e=$(id); if(e){e.addEventListener('input',()=>checkMem('ot')); e.addEventListener('change',()=>checkMem('ot'));} });
   checkMem('ot');
   $('otTopology').onchange = applyOtTopology;
   $('otVersion').onchange = applyOtVersion;
@@ -1352,7 +1352,7 @@ function opstreeSpec() {
     replication_name: $('otReplName').value.trim() || null,
     master_group: $('otMasterGroup').value.trim() || 'myMaster',
     quorum: parseInt($('otQuorum').value) || 2,
-    maxmemory: $('otMaxmemory').value.trim(),
+    maxmemory: maxmemValue('otMaxmemory'),
     maxmemory_policy: $('otEviction').value,
     extra_config: $('otExtraConf').value.trim() || null,
     storage_class: $('otStorageClass').value || null,
@@ -1578,17 +1578,33 @@ $('tDownloadReport').onclick = () => {
 
 /* ------------------------------------------------ memory sanity */
 
-// redis units (256mb, 1gb) and kubernetes units (512Mi, 1Gi) -> bytes
-function toBytes(v) {
-  const m = /^([\d.]+)\s*([kmg]i?b?)?$/i.exec((v || '').trim());
+// Redis and Kubernetes invert the convention: Redis "mb" is BINARY (= K8s "Mi")
+// while Redis "m" is decimal (= K8s "M"). Parsing one with the other's rules
+// understates by up to 7%, which quietly loosens every ratio check.
+const REDIS_UNITS = { '': 1, b: 1, k: 1000, kb: 1024, m: 1e6, mb: 1048576,
+                      g: 1e9, gb: 1073741824 };
+const K8S_UNITS = { '': 1, k: 1000, ki: 1024, m: 1e6, mi: 1048576,
+                    g: 1e9, gi: 1073741824, t: 1e12, ti: 1099511627776 };
+
+function parseQty(v, table) {
+  const m = /^\s*([\d.]+)\s*([a-z]*)\s*$/i.exec(String(v || ''));
   if (!m) return null;
-  const n = parseFloat(m[1]);
-  const u = (m[2] || '').toLowerCase();
-  if (!u) return n;
-  if (u.startsWith('k')) return n * (u.includes('i') ? 1024 : 1000);
-  if (u.startsWith('m')) return n * (u.includes('i') ? 1048576 : 1000000);
-  if (u.startsWith('g')) return n * (u.includes('i') ? 1073741824 : 1000000000);
-  return n;
+  const mult = table[m[2].toLowerCase()];
+  return mult === undefined ? null : parseFloat(m[1]) * mult;
+}
+const redisBytes = v => parseQty(v, REDIS_UNITS);
+const toBytes = v => parseQty(v, K8S_UNITS);          // Kubernetes quantities
+
+// read a value+unit pair back as a Redis-style string
+function maxmemValue(prefix) {
+  const n = $(prefix).value.trim();
+  return n ? n + $(prefix + 'Unit').value : '';
+}
+function setMaxmem(prefix, bytes) {
+  if (!bytes) { $(prefix).value = ''; return; }
+  const unit = bytes % 1073741824 === 0 && bytes >= 1073741824 ? 'gb' : 'mb';
+  $(prefix).value = Math.round(bytes / REDIS_UNITS[unit]);
+  $(prefix + 'Unit').value = unit;
 }
 const human = b => b >= 1073741824 ? (b / 1073741824).toFixed(1) + 'Gi'
                  : b >= 1048576 ? Math.round(b / 1048576) + 'Mi' : b + 'B';
@@ -1600,7 +1616,8 @@ function checkMem(prefix) {
   const memHint = $(prefix === 'c' ? 'cMemHint' : 'otMemHint');
   if (!mmEl || !limEl || !hint) return;
 
-  const mm = toBytes(mmEl.value), lim = toBytes(limEl.value);
+  const mm = redisBytes(maxmemValue(prefix === 'c' ? 'cMaxmemory' : 'otMaxmemory')),
+        lim = toBytes(limEl.value);
   if (!lim) { hint.innerHTML = ''; return; }
 
   if (!mm) {
@@ -2063,8 +2080,7 @@ function pickDay2(r) {
     .then(st => {
       const L = st.live || {};
       if (L.maxmemory) {
-        const mm = L.maxmemory.replace(/\.00[MG]$/, m => m[3].toLowerCase() + 'b').toLowerCase();
-        $('dMaxmemory').value = mm;
+        setMaxmem('dMaxmemory', redisBytes(L.maxmemory.replace(/([MG])$/, (x) => x.toLowerCase() + 'b')));
         $('dMemHint').innerHTML = `Currently <span class="mono">${L.maxmemory}</span>,
           <span class="mono">${L.used_memory}</span> in use, policy
           <span class="mono">${L.maxmemory_policy}</span>. RAM only &mdash; the PVC does not affect it.`;
@@ -2157,7 +2173,7 @@ $('dBump').onclick = () => runDay2('image',
 
 
 $('dMem').onclick = () => {
-  const mm = $('dMaxmemory').value.trim(), lim = $('dMemLimit').value.trim();
+  const mm = maxmemValue('dMaxmemory'), lim = $('dMemLimit').value.trim();
   if (!mm && !lim) return alert('Give a new maxmemory, a new container limit, or both.');
   let msg = `Change cache size on ${DCUR.namespace}/${DCUR.name}?\n\n`;
   msg += mm ? `maxmemory -> ${mm}\n` : '';
@@ -2180,7 +2196,7 @@ function updateQosHint() {
   if (!el) return;
   const ml = $('dMemLimit').value.trim(), mr = $('dMemRequest').value.trim();
   const cl = $('dCpuLimit').value.trim(), cr = $('dCpuRequest').value.trim();
-  const mm = $('dMaxmemory').value.trim();
+  const mm = maxmemValue('dMaxmemory');
 
   const bits = [];
   if (ml && mr && cl && cr) {
@@ -2188,7 +2204,7 @@ function updateQosHint() {
       ? '<span class="ok">QoS Guaranteed</span> — requests equal limits, so this is the last thing evicted under node pressure.'
       : '<span class="warn">QoS Burstable</span> — requests differ from limits. Set them equal for Guaranteed, which is evicted last.');
   }
-  const b = toBytes(mm), lim = toBytes(ml);
+  const b = redisBytes(mm), lim = toBytes(ml);
   if (b && lim) {
     const pct = Math.round(b / lim * 100);
     bits.push(pct > 80
@@ -2199,6 +2215,6 @@ function updateQosHint() {
   }
   el.innerHTML = bits.join('<br>');
 }
-['dMaxmemory', 'dMemLimit', 'dMemRequest', 'dCpuRequest', 'dCpuLimit'].forEach(id => {
+['dMaxmemory', 'dMaxmemoryUnit', 'dMemLimit', 'dMemRequest', 'dCpuRequest', 'dCpuLimit'].forEach(id => {
   const e = $(id); if (e) e.addEventListener('input', updateQosHint);
 });

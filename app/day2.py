@@ -227,22 +227,43 @@ def bump_image(job, kubeconfig: str, spec: Day2Spec) -> None:
 
 # ---------------------------------------------------------------- cache size
 
-def _bytes(v: str) -> float:
-    """Parse both Redis units (256mb) and Kubernetes units (512Mi)."""
-    m = re.match(r"^\s*([\d.]+)\s*([kKmMgG]i?[bB]?)?\s*$", v or "")
+# Redis and Kubernetes use OPPOSITE conventions, which is a genuine trap:
+#
+#   Redis       1k=1000   1kb=1024   1m=10^6   1mb=1024^2   1g=10^9   1gb=1024^3
+#   Kubernetes  1k=1000   1Ki=1024   1M=10^6   1Mi=1024^2   1G=10^9   1Gi=1024^3
+#
+# So Redis "mb" is BINARY and equals Kubernetes "Mi", while Redis "m" is decimal
+# and equals Kubernetes "M". Reading a Redis value with Kubernetes rules
+# understates it by up to 7%, which quietly loosens every ratio check.
+_REDIS_UNITS = {"": 1, "b": 1,
+                "k": 1000, "kb": 1024,
+                "m": 1000000, "mb": 1048576,
+                "g": 1000000000, "gb": 1073741824}
+_K8S_UNITS = {"": 1, "k": 1000, "ki": 1024,
+              "m": 1000000, "mi": 1048576,
+              "g": 1000000000, "gi": 1073741824,
+              "t": 1000 ** 4, "ti": 1024 ** 4}
+
+
+def redis_bytes(v: str) -> float:
+    """Parse a value the way redis-server does."""
+    m = re.match(r"^\s*([\d.]+)\s*([a-zA-Z]*)\s*$", v or "")
     if not m:
         return 0.0
-    n = float(m.group(1))
-    u = (m.group(2) or "").lower()
-    if not u:
-        return n
-    if u.startswith("k"):
-        return n * (1024 if "i" in u else 1000)
-    if u.startswith("m"):
-        return n * (1048576 if "i" in u else 1000000)
-    if u.startswith("g"):
-        return n * (1073741824 if "i" in u else 1000000000)
-    return n
+    return float(m.group(1)) * _REDIS_UNITS.get(m.group(2).lower(), 1)
+
+
+def k8s_bytes(v: str) -> float:
+    """Parse a Kubernetes quantity (512Mi, 1Gi, 1000M)."""
+    m = re.match(r"^\s*([\d.]+)\s*([a-zA-Z]*)\s*$", v or "")
+    if not m:
+        return 0.0
+    return float(m.group(1)) * _K8S_UNITS.get(m.group(2).lower(), 1)
+
+
+def _bytes(v: str) -> float:
+    """Kubernetes flavour -- kept for the container limits."""
+    return k8s_bytes(v)
 
 
 def _human(b: float) -> str:
@@ -300,14 +321,15 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
         parts = [l.strip() for l in out.splitlines() if l.strip()]
         cur_mm = parts[1] if len(parts) > 1 else ""
 
-    job.log(f"  maxmemory (RAM, the cache)  : {_human(_bytes(cur_mm))}"
+    job.log(f"  maxmemory (RAM, the cache)  : {_human(float(cur_mm or 0))}"
             f"  ->  {new_mm or '(unchanged)'}")
     job.log(f"  container memory limit      : {cur_lim or '?'}"
             f"  ->  {new_lim or '(unchanged)'}")
     job.log("  disk (PVC) is NOT involved -- it only holds the AOF/RDB files")
 
-    target_mm = _bytes(new_mm) if new_mm else _bytes(cur_mm)
-    target_lim = _bytes(new_lim) if new_lim else _bytes(cur_lim)
+    # cur_mm comes back from CONFIG GET as a plain byte count
+    target_mm = redis_bytes(new_mm) if new_mm else float(cur_mm or 0)
+    target_lim = k8s_bytes(new_lim) if new_lim else k8s_bytes(cur_lim)
 
     job.step(2, 5, "Checking the ratio")
     if target_lim and target_mm:
@@ -411,7 +433,7 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
             job.log(f"  {p}: CONFIG SET maxmemory {new_mm} -> {'OK' if ok else r.stdout.strip()}")
         job.log("")
         job.log("  applied live, no restart, no downtime")
-        if _bytes(new_mm) < _bytes(cur_mm):
+        if redis_bytes(new_mm) < float(cur_mm or 0):
             job.log("  NOTE: you LOWERED maxmemory. Redis will evict immediately to fit,")
             job.log("  under the current policy, until it is back under the new ceiling.")
 
