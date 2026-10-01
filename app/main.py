@@ -600,6 +600,15 @@ def status(namespace: str, name: str = "", live: bool = True,
         md, st, spec = it["metadata"], it.get("status", {}), it["spec"]
         cs = st.get("containerStatuses") or []
         ready = sum(1 for c in cs if c.get("ready"))
+        res = ((spec.get("containers") or [{}])[0].get("resources") or {})
+        if not out.get("resources"):
+            out["resources"] = {
+                "cpu_request": (res.get("requests") or {}).get("cpu"),
+                "cpu_limit": (res.get("limits") or {}).get("cpu"),
+                "memory_request": (res.get("requests") or {}).get("memory"),
+                "memory_limit": (res.get("limits") or {}).get("memory"),
+                "container": (spec.get("containers") or [{}])[0].get("name"),
+            }
         pods.append({
             "name": md["name"],
             "ready": f"{ready}/{len(cs)}",

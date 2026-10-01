@@ -2052,7 +2052,9 @@ function pickDay2(r) {
   }
   // Never prefill these from a constant: a hardcoded value reads as the current
   // state, and acting on it would silently change something.
-  ['dMaxmemory', 'dMemLimit', 'dReplicas', 'dStorage'].forEach(id => $(id).value = '');
+  ['dMaxmemory', 'dMemLimit', 'dMemRequest', 'dCpuRequest', 'dCpuLimit',
+   'dReplicas', 'dStorage'].forEach(id => $(id).value = '');
+  $('dQosHint').innerHTML = '';
   $('dMemHint').innerHTML = 'Reading the live values…';
   $('dScaleHint').innerHTML = 'Reading the live values…';
   $('dStorageHint').innerHTML = 'Reading the live values…';
@@ -2060,11 +2062,27 @@ function pickDay2(r) {
   api('/api/status?namespace=' + encodeURIComponent(r.namespace) + '&name=' + encodeURIComponent(r.name))
     .then(st => {
       const L = st.live || {};
-      $('dMemHint').innerHTML = L.maxmemory
-        ? `Currently <span class="mono">${L.maxmemory}</span> of cache,
-           <span class="mono">${L.used_memory}</span> in use, policy
-           <span class="mono">${L.maxmemory_policy}</span>. RAM only &mdash; the PVC does not affect it.`
-        : 'RAM. Growing the PVC does not change this &mdash; disk only holds the AOF/RDB files.';
+      if (L.maxmemory) {
+        const mm = L.maxmemory.replace(/\.00[MG]$/, m => m[3].toLowerCase() + 'b').toLowerCase();
+        $('dMaxmemory').value = mm;
+        $('dMemHint').innerHTML = `Currently <span class="mono">${L.maxmemory}</span>,
+          <span class="mono">${L.used_memory}</span> in use, policy
+          <span class="mono">${L.maxmemory_policy}</span>. RAM only &mdash; the PVC does not affect it.`;
+      } else {
+        $('dMemHint').innerHTML = 'RAM. Growing the PVC does not change this.';
+      }
+
+      const R = st.resources || {};
+      $('dMemLimit').value = R.memory_limit || '';
+      $('dMemRequest').value = R.memory_request || '';
+      $('dCpuRequest').value = R.cpu_request || '';
+      $('dCpuLimit').value = R.cpu_limit || '';
+      $('dLimitHint').innerHTML = R.memory_limit
+        ? `Currently <span class="mono">${R.memory_limit}</span>. Leave every field unchanged
+           except maxmemory and the change applies <strong>live with no restart</strong>;
+           touching any of these rolls the pods.`
+        : 'No limit set — the container can grow until the node runs out.';
+      updateQosHint();
 
       // replicas: show and prefill what it actually runs
       const w = (st.workloads || [])[0];
@@ -2145,6 +2163,42 @@ $('dMem').onclick = () => {
   msg += mm ? `maxmemory -> ${mm}\n` : '';
   msg += lim ? `container limit -> ${lim}\n\nChanging the limit is a pod spec change, so the pods WILL ROLL.`
              : `\nThe container limit is unchanged, so this applies live with no restart.`;
-  runDay2('memory', { maxmemory: mm || null, memory_limit: lim || null,
-                      force: $('dMemForce').checked }, msg);
+  runDay2('memory', {
+    maxmemory: mm || null, memory_limit: lim || null,
+    memory_request: $('dMemRequest').value.trim() || null,
+    cpu_request: $('dCpuRequest').value.trim() || null,
+    cpu_limit: $('dCpuLimit').value.trim() || null,
+    force: $('dMemForce').checked,
+  }, msg);
 };
+
+
+/* ------------------------------------------------ day-2 resource hints */
+
+function updateQosHint() {
+  const el = $('dQosHint');
+  if (!el) return;
+  const ml = $('dMemLimit').value.trim(), mr = $('dMemRequest').value.trim();
+  const cl = $('dCpuLimit').value.trim(), cr = $('dCpuRequest').value.trim();
+  const mm = $('dMaxmemory').value.trim();
+
+  const bits = [];
+  if (ml && mr && cl && cr) {
+    bits.push(ml === mr && cl === cr
+      ? '<span class="ok">QoS Guaranteed</span> — requests equal limits, so this is the last thing evicted under node pressure.'
+      : '<span class="warn">QoS Burstable</span> — requests differ from limits. Set them equal for Guaranteed, which is evicted last.');
+  }
+  const b = toBytes(mm), lim = toBytes(ml);
+  if (b && lim) {
+    const pct = Math.round(b / lim * 100);
+    bits.push(pct > 80
+      ? `<span class="err">maxmemory is ${pct}% of the limit</span> — a BGSAVE fork will OOMKill this under write load. Aim for 50–70%.`
+      : pct > 70
+        ? `<span class="warn">maxmemory is ${pct}% of the limit</span> — tight; 50–70% is the safe band.`
+        : `<span class="ok">maxmemory is ${pct}% of the limit</span> — inside the safe band.`);
+  }
+  el.innerHTML = bits.join('<br>');
+}
+['dMaxmemory', 'dMemLimit', 'dMemRequest', 'dCpuRequest', 'dCpuLimit'].forEach(id => {
+  const e = $(id); if (e) e.addEventListener('input', updateQosHint);
+});

@@ -322,7 +322,12 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
         if pct > 70:
             job.log("  WARNING: above the 50-70% safe band")
 
-    limit_changes = bool(new_lim) and _bytes(new_lim) != _bytes(cur_lim)
+    # ANY pod-spec resource change rolls the pods; maxmemory alone does not
+    spec_changes = any([
+        bool(new_lim) and _bytes(new_lim) != _bytes(cur_lim),
+        bool(spec.memory_request), bool(spec.cpu_request), bool(spec.cpu_limit),
+    ])
+    limit_changes = spec_changes
     if limit_changes:
         job.step(3, 5, "Checking a node can hold it")
         for n in ocp.schedulable_nodes(kubeconfig):
@@ -353,24 +358,47 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
                     "below will be lost on restart")
 
     job.step(5, 5, "Applying")
-    if limit_changes:
+    if spec_changes:
+        lim = {}
+        req = {}
+        if new_lim:
+            lim["memory"] = new_lim
+        if spec.memory_request:
+            req["memory"] = spec.memory_request
+        if spec.cpu_limit:
+            lim["cpu"] = spec.cpu_limit
+        if spec.cpu_request:
+            req["cpu"] = spec.cpu_request
+
+        guaranteed = (lim.get("memory") and lim["memory"] == req.get("memory")
+                      and lim.get("cpu") and lim["cpu"] == req.get("cpu"))
+        job.log(f"  limits  : {lim or '(unchanged)'}")
+        job.log(f"  requests: {req or '(unchanged)'}")
+        job.log("  QoS will be " + ("Guaranteed (requests == limits, evicted LAST)"
+                                    if guaranteed else
+                                    "Burstable -- set requests equal to limits for "
+                                    "Guaranteed, which is evicted last under node pressure"))
+
         if spec.kind == "opstree":
             import json as _j
-            patch = _j.dumps({"spec": {"kubernetesConfig": {"resources": {
-                "limits": {"memory": new_lim},
-                "requests": {"memory": new_lim}}}}})
+            body: dict[str, Any] = {}
+            if lim:
+                body["limits"] = lim
+            if req:
+                body["requests"] = req
+            patch = _j.dumps({"spec": {"kubernetesConfig": {"resources": body}}})
             ocp.run(kubeconfig, ["patch", plural, name, "-n", ns, "--type", "merge",
                                  "-p", patch], log=job.log, timeout=90)
             job.log("  the operator rolls the pods")
         else:
-            ocp.run(kubeconfig, ["set", "resources", f"{kind}/{name}", "-n", ns,
-                                 f"--limits=memory={new_lim}",
-                                 f"--requests=memory={new_lim}"],
-                    log=job.log, timeout=90)
+            args = ["set", "resources", f"{kind}/{name}", "-n", ns]
+            if lim:
+                args.append("--limits=" + ",".join(f"{k}={v}" for k, v in lim.items()))
+            if req:
+                args.append("--requests=" + ",".join(f"{k}={v}" for k, v in req.items()))
+            ocp.run(kubeconfig, args, log=job.log, timeout=90)
             ocp.run(kubeconfig, ["rollout", "status", f"{kind}/{name}", "-n", ns,
                                  "--timeout=900s"], check=False, timeout=960, log=job.log)
-        job.log("")
-        job.log("  requests were set equal to limits -- QoS class Guaranteed, evicted last")
     elif new_mm:
         # no pod spec change: apply it live, every pod, zero downtime
         pods = (ocp.jsonpath(kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
@@ -388,4 +416,4 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
             job.log("  under the current policy, until it is back under the new ceiling.")
 
     job.result.update({"maxmemory": new_mm or cur_mm, "memory_limit": new_lim or cur_lim,
-                       "restarted": limit_changes})
+                       "restarted": spec_changes})

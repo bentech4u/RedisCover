@@ -602,20 +602,28 @@
       </div>
 
       <div class="opblock">
-        <h3>Change cache size <span class="dim">&mdash; RAM, the actual capacity</span></h3>
+        <h3>Change cache size and resources</h3>
         <div class="grid g2">
           <div class="field">
-            <label>maxmemory</label>
-            <input id="dMaxmemory" placeholder="e.g. 1gb">
+            <label>maxmemory <span class="dim">&mdash; RAM, the actual cache capacity</span></label>
+            <input id="dMaxmemory" placeholder="loading&hellip;">
             <div class="hint" id="dMemHint"></div>
           </div>
           <div class="field">
             <label>Container memory limit</label>
-            <input id="dMemLimit" placeholder="leave blank to keep the current limit">
-            <div class="hint" id="dLimitHint">Blank keeps the current ceiling, so the change
-              applies <strong>live with no restart</strong>. Changing it rolls the pods.</div>
+            <input id="dMemLimit" placeholder="loading&hellip;">
+            <div class="hint" id="dLimitHint"></div>
           </div>
         </div>
+        <div class="grid g3" style="margin-top:14px">
+          <div class="field"><label>Memory request</label>
+            <input id="dMemRequest" placeholder="loading&hellip;"></div>
+          <div class="field"><label>CPU request</label>
+            <input id="dCpuRequest" placeholder="loading&hellip;"></div>
+          <div class="field"><label>CPU limit</label>
+            <input id="dCpuLimit" placeholder="loading&hellip;"></div>
+        </div>
+        <div class="hint" id="dQosHint" style="margin-top:10px"></div>
         <div class="actions">
           <button id="dMem">Apply</button>
           <label class="chk" style="font-size:12px"><input type="checkbox" id="dMemForce"> force</label>

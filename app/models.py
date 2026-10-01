@@ -188,6 +188,9 @@ class Day2Spec(BaseModel):
     replicas: int = 3
     storage_size: str = "10Gi"
     image: Optional[str] = None
-    maxmemory: Optional[str] = None      # RAM -- the actual cache capacity
-    memory_limit: Optional[str] = None   # container ceiling
+    maxmemory: Optional[str] = None       # RAM -- the actual cache capacity
+    memory_limit: Optional[str] = None    # container ceiling
+    memory_request: Optional[str] = None
+    cpu_request: Optional[str] = None
+    cpu_limit: Optional[str] = None
     force: bool = False
