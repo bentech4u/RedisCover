@@ -45,8 +45,9 @@ typing the release name to confirm.
 | **Deploy** | Redis community, Opstree operator or Redis Enterprise. Topology- and version-driven forms, YAML preview, live deployment log. |
 | **Cluster** | Nodes, roles, taints, zones, storage classes — with warnings about what will bite you. |
 | **Sizing** | A calculator that shows its working, and a keyspace analyzer that fills it in from a running Redis. |
+| **Day-2** | Scale, resize the cache, grow a PVC, bump the image, manage ACL users — every field read from the live release, never prefilled from a constant. |
 | **Operators** | Searches all packages in your cluster's catalog sources, not just Redis. Installs any of them. |
-| **Test** | 14 tests in three tiers, including failure drills that measure the write outage. |
+| **Test** | 15 tests in three tiers, including failure drills that measure the write outage. |
 | **Console** | A `redis-cli` against a real pod. Redis classifies each command you type, so read / write / admin are separated and destructive commands are refused outright. |
 | **Status** | Live `INFO` from a running pod, plus pods, services, storage, policies and events. |
 | **Uninstall** | Discovers what is installed and shows a per-object deletion plan before touching anything. |
@@ -68,6 +69,25 @@ cluster's catalog sources, the CSV is pinned, and update approval defaults to
 Manual so a vendor release cannot roll-restart your database unannounced.
 
 ![Enterprise form](docs/screenshots/03-enterprise.png)
+
+**Day-2** — every field is read from the running release, never prefilled from a
+constant. `maxmemory` carries its own unit list because Redis's `gb` and
+Kubernetes' `Gi` are not the same number, and the hint says what fraction of the
+container limit you are about to commit to.
+
+![Day-2 operations](docs/screenshots/04-day2.png)
+
+**Console** — a `redis-cli` against a real pod. Redis classifies each command
+through `COMMAND INFO`, so read, write and admin are separated correctly for
+that exact server version, and destructive commands are refused in every mode.
+
+![Console](docs/screenshots/05-console.png)
+
+**Status** — live `INFO` from a pod, with the reading explained rather than
+dumped: `redis_mode: standalone` on a replicated server is expected, and the
+page says so instead of leaving you to wonder.
+
+![Status](docs/screenshots/06-status.png)
 
 ---
 
@@ -145,8 +165,8 @@ behaviour rather than a bug.
 
 **Tier 1 — Safe.** Auth enforced both ways · data types and TTL · configuration
 actually loaded · persistence armed · replication linked with per-replica lag ·
-propagation timing · replicas reject writes · cluster slot coverage ·
-NetworkPolicy reachability.
+propagation timing · replicas reject writes · Sentinel monitoring a primary ·
+cluster slot coverage · NetworkPolicy reachability.
 
 **Tier 2 — Disruptive.** Hard-kill the primary, kill a replica, stop/start
 cycle. Each seeds a known keyset first, so data loss is a **number**. It
@@ -275,6 +295,8 @@ app/models.py       pydantic request models
 app/manifests.py    all manifest generation; nothing is applied from elsewhere
 app/opstree.py      Opstree custom resources + live CRD schema reads
 app/discover.py     finds what is already installed, and the leftovers
+app/inspect.py      pre-login endpoint and certificate inspection
+app/day2.py         scale, storage, image, memory and ACL operations
 app/operators.py    OperatorHub search over a cached index
 app/redistests.py   the test suite: registry, runner, report
 app/analyze.py      keyspace analyzer

@@ -85,7 +85,7 @@ def scale(job, kubeconfig: str, spec: Day2Spec) -> None:
 # ---------------------------------------------------------------- storage
 
 def _sync_claim_template(job, kubeconfig: str, ns: str, sts: str, size: str) -> bool:
-    """Make a StatefulSet\'s volumeClaimTemplates match the PVCs we just grew.
+    """Make a StatefulSet's volumeClaimTemplates match the PVCs we just grew.
 
     The API forbids patching volumeClaimTemplates -- it is on the list of fields
     a StatefulSet update may not touch -- so growing the PVCs alone leaves the

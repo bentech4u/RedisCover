@@ -14,7 +14,7 @@ Destructive commands are refused outright in every mode -- there is no unlock.
 Wiping a keyspace or repointing replication from a browser tab, on an app this
 has no login of its own, is not a thing to put behind a checkbox.
 
-That list is curated rather than derived, because Redis\'s own flags do not draw
+That list is curated rather than derived, because Redis's own flags do not draw
 the line in the right place: on this cluster, COMMAND INFO reports eight
 commands as both `write` and `@dangerous`, and three of them (SORT, RESTORE,
 PFDEBUG) are ordinary data operations that a reader legitimately needs. Flags
@@ -36,18 +36,18 @@ NEVER = {
     "flushdb":    "wipes every key in the current database",
     "shutdown":   "stops the server",
     "debug":      "can deliberately crash or stall the server (DEBUG SEGFAULT, DEBUG SLEEP)",
-    "replicaof":  "repoints replication and discards this server\'s data",
-    "slaveof":    "repoints replication and discards this server\'s data",
-    "failover":   "forces a failover outside the operator\'s control",
+    "replicaof":  "repoints replication and discards this server's data",
+    "slaveof":    "repoints replication and discards this server's data",
+    "failover":   "forces a failover outside the operator's control",
     "swapdb":     "swaps two whole databases under live clients",
     "migrate":    "moves keys out to another server",
 }
 
 # Subcommands of container commands that are equally off the table.
 NEVER_SUB = {
-    ("cluster", "reset"):   "destroys this node\'s cluster membership",
+    ("cluster", "reset"):   "destroys this node's cluster membership",
     ("cluster", "forget"):  "evicts a node from the cluster",
-    ("cluster", "failover"): "forces a failover outside the operator\'s control",
+    ("cluster", "failover"): "forces a failover outside the operator's control",
     ("script", "flush"):    "drops every cached Lua script",
     ("function", "flush"):  "drops every registered function",
 }
@@ -153,7 +153,7 @@ def _auth(username: str, password: str) -> list[str]:
 
 
 def pods(kubeconfig: str, ns: str, name: str) -> dict[str, Any]:
-    """Pod list with each one\'s replication role, so the console can warn before
+    """Pod list with each one's replication role, so the console can warn before
     you aim a write at a replica instead of after Redis rejects it."""
     names = _pod_names(kubeconfig, ns, name)
     if not names:
