@@ -659,10 +659,36 @@ function renderStatus(d) {
   if (L.pod) {
     const hit = parseInt(L.keyspace_hits || 0), miss = parseInt(L.keyspace_misses || 0);
     const ratio = (hit + miss) ? Math.round(hit / (hit + miss) * 100) : null;
+    // redis_mode is standalone | sentinel | cluster -- it reports the PROTOCOL,
+    // not whether replication is configured. A fully replicated primary still
+    // says "standalone", which reads as a contradiction next to "2 replicas
+    // attached". Derive the real topology instead and only surface redis_mode
+    // when it actually carries information.
+    const slaves = parseInt(L.connected_slaves || 0);
+    let topo, topoNote = '';
+    if (L.mode === 'cluster') {
+      topo = 'Redis Cluster — data sharded by hash slot';
+    } else if (L.mode === 'sentinel') {
+      topo = 'Sentinel — monitoring, holds no data';
+    } else if (L.role === 'master' && slaves > 0) {
+      topo = `Replication — 1 primary + ${slaves} replica(s)`;
+      topoNote = `Redis reports <span class="mono">redis_mode: standalone</span> here, which only
+        means it is not running the Cluster or Sentinel protocol. Replication is a feature of a
+        standalone server, so that is expected.`;
+    } else if (L.role === 'slave') {
+      topo = 'Replica — read-only, follows a primary';
+    } else {
+      topo = 'Standalone — a single server, no replicas attached';
+      if (L.role === 'master') {
+        topoNote = 'No replicas are connected. If you deployed a replication topology, '
+                 + 'that is a fault — check the replication test.';
+      }
+    }
+
     const kv = [
-      ['Redis version', `${L.version} (${L.mode})`],
-      ['Role', L.role + (L.connected_slaves && L.connected_slaves !== '0'
-        ? ` — ${L.connected_slaves} replica(s) attached` : '')],
+      ['Redis version', L.version],
+      ['Topology', topo],
+      ['Role', L.role + (slaves > 0 ? ` — ${slaves} replica(s) attached` : '')],
       ['Memory', `${L.used_memory} used of ${L.maxmemory} (${L.maxmemory_policy})`],
       ['Keys', L.keys || '(empty)'],
       ['Clients', L.connected_clients],
@@ -674,7 +700,8 @@ function renderStatus(d) {
     $('sLive').innerHTML =
       `<div class="alert i" style="margin-bottom:4px">Live <span class="mono">INFO</span> from
         <span class="mono">${L.pod}</span></div>
-       <div class="kv">${kv.map(([k, v]) => `<div>${k}</div><div class="mono">${v}</div>`).join('')}</div>`;
+       <div class="kv">${kv.map(([k, v]) => `<div>${k}</div><div class="mono">${v}</div>`).join('')}</div>` +
+      (topoNote ? `<div class="hint" style="margin-top:10px">${topoNote}</div>` : '');
   } else if (d.pods.length) {
     $('sLive').innerHTML = '<div class="alert w">Could not read live INFO — no password found, or no pod ready.</div>';
   }
