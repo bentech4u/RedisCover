@@ -2047,21 +2047,57 @@ function pickDay2(r) {
   $('dImageHint').innerHTML = `Currently <span class="mono">${r.version || 'unknown'}</span>.
     Checked before applying: the cluster must be able to pull it, and a downgrade is refused
     unless forced &mdash; Redis does not guarantee an older server can read a newer RDB or AOF.`;
-  $('dScaleHint').innerHTML = r.topology === 'standalone'
-    ? 'A standalone release is one pod. Scaling it past 1 would give you independent, unsynchronised copies — use the Replication topology instead.'
-    : 'Removing a replica is immediate. Adding one syncs a full copy from the primary first.';
-  $('dMaxmemory').value = '';
-  $('dMemLimit').value = '';
-  $('dMemHint').innerHTML = 'RAM. Growing the PVC does not change this &mdash; disk only holds the AOF/RDB files.';
+  if (r.topology === 'standalone') {
+    $('dScaleHint').innerHTML = 'A standalone release is one pod. Scaling past 1 would give you independent, unsynchronised copies — use the Replication topology instead.';
+  }
+  // Never prefill these from a constant: a hardcoded value reads as the current
+  // state, and acting on it would silently change something.
+  ['dMaxmemory', 'dMemLimit', 'dReplicas', 'dStorage'].forEach(id => $(id).value = '');
+  $('dMemHint').innerHTML = 'Reading the live values…';
+  $('dScaleHint').innerHTML = 'Reading the live values…';
+  $('dStorageHint').innerHTML = 'Reading the live values…';
+
   api('/api/status?namespace=' + encodeURIComponent(r.namespace) + '&name=' + encodeURIComponent(r.name))
     .then(st => {
       const L = st.live || {};
-      if (L.maxmemory) {
-        $('dMemHint').innerHTML = `Currently <span class="mono">${L.maxmemory}</span> of cache,
-          <span class="mono">${L.used_memory}</span> in use, policy <span class="mono">${L.maxmemory_policy}</span>.
-          RAM only &mdash; the PVC does not affect it.`;
+      $('dMemHint').innerHTML = L.maxmemory
+        ? `Currently <span class="mono">${L.maxmemory}</span> of cache,
+           <span class="mono">${L.used_memory}</span> in use, policy
+           <span class="mono">${L.maxmemory_policy}</span>. RAM only &mdash; the PVC does not affect it.`
+        : 'RAM. Growing the PVC does not change this &mdash; disk only holds the AOF/RDB files.';
+
+      // replicas: show and prefill what it actually runs
+      const w = (st.workloads || [])[0];
+      if (w && w.ready) {
+        const want = w.ready.split('/')[1];
+        $('dReplicas').value = want;
+        $('dScaleHint').innerHTML = `Currently <span class="mono">${w.ready}</span> ready
+          (${w.kind}). Removing a replica is immediate; adding one syncs a full copy from the
+          primary first.`;
+      } else {
+        $('dScaleHint').innerHTML = 'Could not read the current replica count.';
       }
-    }).catch(() => {});
+
+      // storage: prefill the real size so "Grow" is an explicit increase
+      const pvcs = st.pvcs || [];
+      if (pvcs.length) {
+        const sizes = [...new Set(pvcs.map(p => p.capacity).filter(Boolean))];
+        $('dStorage').value = sizes.length === 1 ? sizes[0] : '';
+        const sc = [...new Set(pvcs.map(p => p.storage_class))].join(', ');
+        $('dStorageHint').innerHTML = `${pvcs.length} volume(s) at
+          <span class="mono">${sizes.join(', ') || '?'}</span> on
+          <span class="mono">${sc}</span>. Enter a LARGER size &mdash; Kubernetes can grow a
+          volume but never shrink it, and only when the StorageClass allows expansion.
+          This is disk for the AOF/RDB files; it does <strong>not</strong> change cache capacity.`;
+      } else {
+        $('dStorageHint').innerHTML = 'No PersistentVolumeClaims found for this release.';
+      }
+    })
+    .catch(() => {
+      $('dMemHint').textContent = 'Could not read the live values.';
+      $('dScaleHint').textContent = 'Could not read the live values.';
+      $('dStorageHint').textContent = 'Could not read the live values.';
+    });
   $('dOpCard').classList.remove('hide');
   $('dOpCard').scrollIntoView({ behavior: 'smooth' });
 }
@@ -2084,10 +2120,17 @@ $('dScale').onclick = () => runDay2('scale',
   { replicas: parseInt($('dReplicas').value) || 1 },
   `Scale ${DCUR.namespace}/${DCUR.name} to ${$('dReplicas').value} replica(s)?`);
 
-$('dGrow').onclick = () => runDay2('storage',
-  { storage_size: $('dStorage').value.trim() },
-  `Grow every PVC of ${DCUR.namespace}/${DCUR.name} to ${$('dStorage').value}?\n\n` +
+$('dGrow').onclick = () => {
+  const want = $('dStorage').value.trim();
+  if (!want) return alert('Enter the new size.');
+  const cur = ($('dStorageHint').textContent.match(/at\s+([\d.]+\s*[GMT]i?)/) || [])[1];
+  if (cur && want.replace(/\s/g, '') === cur.replace(/\s/g, ''))
+    return alert(`That is the size it already is (${cur}). Enter a larger value to grow it.`);
+  return runDay2('storage',
+  { storage_size: want },
+  `Grow every PVC of ${DCUR.namespace}/${DCUR.name} to ${want}?\n\n` +
   `This cannot be undone — Kubernetes can grow a volume but never shrink it.`);
+};
 
 $('dBump').onclick = () => runDay2('image',
   { image: $('dImage').value.trim(), force: $('dForce').checked },

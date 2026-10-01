@@ -593,7 +593,7 @@
           <div class="field">
             <label>Replicas</label>
             <div class="inline">
-              <input id="dReplicas" type="number" min="1" max="9" value="3">
+              <input id="dReplicas" type="number" min="1" max="9" placeholder="loading…">
               <button id="dScale">Scale</button>
             </div>
             <div class="hint" id="dScaleHint"></div>
@@ -628,12 +628,11 @@
           <div class="field">
             <label>New size per volume</label>
             <div class="inline">
-              <input id="dStorage" value="10Gi">
+              <input id="dStorage" placeholder="loading…">
               <button id="dGrow">Grow</button>
             </div>
-            <div class="hint">Disk for the AOF/RDB files. This does <strong>not</strong> change
-              cache capacity &mdash; use "Change cache size" above. Kubernetes can only grow a
-              volume, never shrink it, and only when the StorageClass allows expansion.</div>
+            <div class="hint" id="dStorageHint">Disk for the AOF/RDB files. This does
+              <strong>not</strong> change cache capacity &mdash; use "Change cache size" above.</div>
           </div>
         </div>
       </div>
