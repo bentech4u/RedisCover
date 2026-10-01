@@ -200,7 +200,7 @@ document.querySelectorAll('.tab').forEach(t => {
   t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
-    ['deploy', 'cluster', 'sizing', 'day2', 'operators', 'tests', 'status', 'uninstall'].forEach(n => {
+    ['deploy', 'cluster', 'sizing', 'day2', 'operators', 'tests', 'console', 'status', 'uninstall'].forEach(n => {
       $('tab' + n[0].toUpperCase() + n.slice(1)).classList.toggle('hide', n !== t.dataset.tab);
     });
   };
@@ -2348,3 +2348,170 @@ $('aclDelete').onclick = () => {
     `DELETE ACL user '${u.username}'?\n\nAny application using it will start getting ` +
     `WRONGPASS immediately.`);
 };
+
+/* ------------------------------------------------ console (redis-cli) */
+
+let CLI = { rel: null, mode: 'read', hist: [], hpos: -1 };
+
+async function scanForCli() {
+  $('cScanState').innerHTML = '<span class="spin"></span> scanning…';
+  try {
+    const d = await api('/api/discover');
+    const rels = d.releases.filter(r => !r.deleting);
+    $('cScanState').textContent =
+      `${rels.length} release(s) · scanned ${new Date().toLocaleTimeString()}`;
+    $('cTable').innerHTML = rels.length
+      ? '<tr><th></th><th>Type</th><th>Namespace / name</th><th>Status</th></tr>' +
+        rels.map((r, i) => `<tr>
+          <td><input type="radio" name="crel" value="${i}" style="width:auto"></td>
+          <td>${r.kind}${r.cr_kind ? ' <span class="dim">/ ' + r.cr_kind + '</span>' : ''}</td>
+          <td class="mono">${r.namespace}/<strong>${r.name}</strong></td>
+          <td class="ok">${r.status}</td></tr>`).join('')
+      : '<tr><td class="dim">Nothing deployed.</td></tr>';
+    document.querySelectorAll('input[name=crel]').forEach(rb => {
+      rb.onchange = () => pickCli(rels[parseInt(rb.value)]);
+    });
+  } catch (e) { $('cScanState').innerHTML = `<span class="err">${e.message}</span>`; }
+}
+
+async function pickCli(r) {
+  CLI.rel = r;
+  $('cPicked').classList.remove('hide');
+  $('cUnlockName').textContent = r.name;
+  $('cPod').innerHTML = '<option value="">loading…</option>';
+  try {
+    const pd = await api(`/api/cli/pods?namespace=${encodeURIComponent(r.namespace)}&name=${encodeURIComponent(r.name)}`);
+    $('cPod').innerHTML = (pd.pods || []).length
+      ? pd.pods.map(p =>
+          `<option value="${p.name}">${p.name}${p.role ? ' — ' + p.role : ''}</option>`).join('')
+      : '<option value="">(first pod)</option>';
+  } catch (e) { $('cPod').innerHTML = '<option value="">(first pod)</option>'; }
+  $('cUser').innerHTML = '<option value="default">default</option>';
+  try {
+    const d = await api(`/api/acl?namespace=${encodeURIComponent(r.namespace)}&name=${encodeURIComponent(r.name)}`);
+    const names = (d.users || []).map(u => u.username || u.name).filter(Boolean);
+    if (names.length) {
+      $('cUser').innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
+    }
+  } catch (e) { /* ACL listing is a nicety; default always works */ }
+  $('cInput').disabled = false;
+  $('cPrompt').textContent = `${r.namespace}/${r.name}>`;
+  if (!$('cTerm').dataset.greeted) {
+    termWrite('meta', `Connected through oc exec to ${r.namespace}/${r.name}. ` +
+      `Read-only mode. Type help for what that allows.`);
+    $('cTerm').dataset.greeted = '1';
+  }
+  $('cInput').focus();
+}
+
+function termWrite(cls, text) {
+  const t = $('cTerm');
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = text;
+  t.appendChild(d);
+  t.scrollTop = t.scrollHeight;
+}
+
+document.querySelectorAll('#cModes .opt').forEach(o => {
+  o.onclick = () => {
+    const want = o.dataset.mode;
+    if (want === 'admin' && CLI.mode !== 'admin') {
+      $('cUnlock').classList.remove('hide');
+      $('cUnlockInput').value = '';
+      $('cUnlockInput').focus();
+      $('cUnlockInput').oninput = () => {
+        if ($('cUnlockInput').value.trim() === (CLI.rel ? CLI.rel.name : '')) {
+          setCliMode('admin');
+          $('cUnlock').classList.add('hide');
+          $('cInput').focus();
+        }
+      };
+      return;
+    }
+    $('cUnlock').classList.add('hide');
+    setCliMode(want);
+  };
+});
+
+function setCliMode(m) {
+  CLI.mode = m;
+  document.querySelectorAll('#cModes .opt').forEach(x =>
+    x.classList.toggle('sel', x.dataset.mode === m));
+  termWrite('note', `— mode: ${m} —`);
+}
+
+const CLI_HELP = {
+  read: 'Read-only. Anything Redis flags readonly: GET, MGET, SCAN, TTL, EXISTS, TYPE, ' +
+        'LRANGE, HGETALL, INFO, CONFIG GET, ACL LIST, MEMORY USAGE, SLOWLOG GET, CLIENT LIST.',
+  write: 'Read plus anything Redis flags write: SET, SETEX, DEL, EXPIRE, INCR, LPUSH, HSET, ' +
+         'SADD, ZADD, RENAME, COPY, SORT. These change application data.',
+  admin: 'Read, write, plus anything Redis flags admin: CONFIG SET, ACL SETUSER, ACL DELUSER, ' +
+         'CLIENT KILL, SLOWLOG RESET, LATENCY RESET, CLUSTER SETSLOT. These change the server.',
+};
+
+async function cliSubmit() {
+  const inp = $('cInput');
+  const cmd = inp.value.trim();
+  if (!cmd || !CLI.rel) return;
+  inp.value = '';
+  CLI.hist.push(cmd); CLI.hpos = CLI.hist.length;
+
+  termWrite('echo', `${CLI.rel.name}> ${cmd}`);
+
+  const low = cmd.toLowerCase();
+  if (low === 'clear') { $('cTerm').innerHTML = ''; return; }
+  if (low === 'help') {
+    termWrite('out', CLI_HELP[CLI.mode]);
+    termWrite('deny', 'Refused in every mode, no unlock: FLUSHALL, FLUSHDB, SHUTDOWN, DEBUG, ' +
+      'REPLICAOF, SLAVEOF, FAILOVER, SWAPDB, MIGRATE, CLUSTER RESET, CLUSTER FORGET, ' +
+      'CLUSTER FAILOVER, SCRIPT FLUSH, FUNCTION FLUSH.');
+    return;
+  }
+  if (low === 'exit' || low === 'quit') {
+    termWrite('note', 'Nothing to close — each command is its own short-lived oc exec.');
+    return;
+  }
+
+  inp.disabled = true;
+  try {
+    const d = await api('/api/cli', {
+      method: 'POST',
+      body: JSON.stringify({
+        namespace: CLI.rel.namespace, name: CLI.rel.name,
+        pod: $('cPod').value, username: $('cUser').value,
+        mode: CLI.mode, command: cmd,
+      }),
+    });
+    if (d.error) { termWrite('deny', d.error); }
+    else if (d.blocked) { termWrite('deny', d.output); }
+    else {
+      if (d.warn) termWrite('note', d.warn);
+      termWrite('out', d.output);
+      termWrite('meta', `${d.pod} · as ${d.username} · ${d.tier}`);
+    }
+  } catch (e) {
+    termWrite('deny', e.message || String(e));
+  } finally {
+    inp.disabled = false;
+    inp.focus();
+  }
+}
+
+$('cInput').addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') { ev.preventDefault(); cliSubmit(); return; }
+  if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    if (CLI.hpos > 0) { CLI.hpos--; $('cInput').value = CLI.hist[CLI.hpos]; }
+  }
+  if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    if (CLI.hpos < CLI.hist.length - 1) { CLI.hpos++; $('cInput').value = CLI.hist[CLI.hpos]; }
+    else { CLI.hpos = CLI.hist.length; $('cInput').value = ''; }
+  }
+});
+
+$('btnCliScan').onclick = scanForCli;
+document.querySelector('.tab[data-tab="console"]').addEventListener('click', () => {
+  if (!CLI.rel) scanForCli();
+});

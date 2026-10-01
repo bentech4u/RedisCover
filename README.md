@@ -47,6 +47,7 @@ typing the release name to confirm.
 | **Sizing** | A calculator that shows its working, and a keyspace analyzer that fills it in from a running Redis. |
 | **Operators** | Searches all packages in your cluster's catalog sources, not just Redis. Installs any of them. |
 | **Test** | 14 tests in three tiers, including failure drills that measure the write outage. |
+| **Console** | A `redis-cli` against a real pod. Redis classifies each command you type, so read / write / admin are separated and destructive commands are refused outright. |
 | **Status** | Live `INFO` from a running pod, plus pods, services, storage, policies and events. |
 | **Uninstall** | Discovers what is installed and shows a per-object deletion plan before touching anything. |
 
@@ -164,6 +165,54 @@ own table for a change ticket.
 
 ---
 
+## The console
+
+The Console tab runs `redis-cli` inside a pod over `oc exec`. The browser never
+speaks RESP and nothing is proxied — each command is its own short-lived exec,
+and the output you see is what Redis said.
+
+Commands are classified by **asking the server**, not by matching a list that
+drifts with every release:
+
+```
+COMMAND INFO <cmd>   ->  readonly / write / admin  +  ACL categories
+```
+
+so the tiering is correct for the exact Redis version on the pod you are talking
+to. `readonly` is a read, `write` needs write mode, `admin` needs admin mode, and
+admin mode asks you to type the release name first. Container commands
+(`CONFIG`, `ACL`, `CLIENT`, `CLUSTER`, …) report no flags of their own, so their
+read-only subcommands are allowlisted and everything else counts as admin.
+
+Destructive commands are refused in **every** mode, with no unlock:
+
+```
+FLUSHALL  FLUSHDB  SHUTDOWN  DEBUG  REPLICAOF  SLAVEOF
+FAILOVER  SWAPDB   MIGRATE   CLUSTER RESET / FORGET / FAILOVER
+SCRIPT FLUSH  FUNCTION FLUSH
+```
+
+That list is curated rather than derived, because Redis's own flags do not draw
+the line where an operator needs it. `COMMAND INFO` reports eight commands as
+both `write` and `@dangerous`, and three of them — `SORT`, `RESTORE`, `PFDEBUG`
+— are ordinary data operations. Flags decide the tier; the list decides what is
+off the table.
+
+Two further details worth knowing:
+
+* **You pick the pod**, and the dropdown labels which one is primary. Aim a
+  write at a replica and Redis answers `READONLY You can't write against a read
+  only replica` — the console does not hide that.
+* **You pick the ACL user.** If you built scoped users on the Day-2 tab, connect
+  as one; Redis then enforces its ACL *on top of* the mode, so a `readonly` user
+  in write mode still gets `NOPERM`.
+
+`KEYS` is allowed — it is genuinely `readonly` — but it is flagged `@dangerous`
+by Redis because it scans the whole keyspace on a single-threaded server, so the
+console prints that warning alongside the result.
+
+---
+
 ## What it checks before it writes anything
 
 This is the part that makes it more than a YAML generator. Each of these was
@@ -205,7 +254,13 @@ added because it went wrong in real use:
   renamed field in a version I have not seen will surface as a rejection.
 * **Community mode is standalone or replication only.** See above.
 * **Sessions live in memory.** Restarting the app logs everyone out.
-* **The UI has no authentication of its own.** See the security section.
+* **The UI has no authentication of its own.** See the security section. This is
+  why the Console refuses `FLUSHALL`, `FLUSHDB`, `SHUTDOWN`, `DEBUG`,
+  `REPLICAOF`, `SLAVEOF`, `FAILOVER`, `SWAPDB`, `MIGRATE` and the destructive
+  `CLUSTER` subcommands in every mode, with no unlock: a browser tab reachable
+  by anyone on the host should not be able to wipe a keyspace at all. Admin mode
+  reaches `CONFIG SET` and `ACL SETUSER`, so it asks you to type the release
+  name first.
 * Tested against OpenShift 4.22. Earlier 4.x should work; nothing depends on
   4.22-specific APIs.
 
@@ -223,6 +278,7 @@ app/discover.py     finds what is already installed, and the leftovers
 app/operators.py    OperatorHub search over a cached index
 app/redistests.py   the test suite: registry, runner, report
 app/analyze.py      keyspace analyzer
+app/cli.py          the console: command classification and oc exec
 app/deploy.py       job runner and the deployment orchestrations
 app/main.py         FastAPI routes, sessions, SSE log streaming
 app/static/         single-page UI, no build step

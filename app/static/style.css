@@ -127,3 +127,46 @@ pre{background:#0b0d11;border:1px solid var(--line);border-radius:6px;padding:14
 .unitpair{display:flex;gap:6px}
 .unitpair input{flex:1;min-width:0}
 .unitpair select{flex:0 0 auto;width:auto;min-width:118px}
+
+/* ---------- console ---------- */
+.term {
+  background: #0b0e14;
+  border: 1px solid var(--line);
+  border-radius: 6px 6px 0 0;
+  padding: 12px 14px;
+  height: 340px;
+  overflow-y: auto;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c9d1d9;
+}
+.term .echo   { color: #79c0ff; }
+.term .out    { color: #c9d1d9; }
+.term .deny   { color: #ff9492; }
+.term .note   { color: #d29922; }
+.term .meta   { color: #6e7681; font-size: 11px; }
+.term .ran    { color: #7ee787; }
+.termline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0b0e14;
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  padding: 9px 14px;
+}
+.termline .prompt { color: #7ee787; flex: 0 0 auto; font-size: 12px; }
+.termline input {
+  flex: 1 1 auto;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: #c9d1d9;
+  font-size: 12px;
+  padding: 0;
+  margin: 0;
+  width: auto;
+}
+.termline input:disabled { color: #6e7681; }

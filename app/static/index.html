@@ -66,6 +66,7 @@
     <div class="tab" data-tab="day2">Day-2</div>
     <div class="tab" data-tab="operators">Operators</div>
     <div class="tab" data-tab="tests">Test</div>
+    <div class="tab" data-tab="console">Console</div>
     <div class="tab" data-tab="status">Status</div>
     <div class="tab" data-tab="uninstall">Uninstall</div>
   </div>
@@ -854,6 +855,84 @@
   </div>
 
   <!-- ---------- STATUS ---------- -->
+  <!-- ---------- CONSOLE ---------- -->
+  <div id="tabConsole" class="hide">
+
+    <section class="card">
+      <h2>redis-cli</h2>
+      <div class="sub">
+        Commands run through <span class="mono">oc exec</span> against a real pod &mdash; there is
+        no emulator in between, so what you see is what Redis said. Nothing is stored and nothing
+        is proxied: the browser never talks to Redis directly.
+      </div>
+
+      <div class="inline">
+        <button class="ghost" id="btnCliScan">Find releases</button>
+        <span id="cScanState" class="dim"></span>
+      </div>
+
+      <table id="cTable"></table>
+
+      <div id="cPicked" class="hide">
+        <div class="g2">
+          <label>Pod
+            <select id="cPod"></select>
+            <span class="hint">Replicas reject writes. Pick the primary for anything mutating.</span>
+          </label>
+          <label>Connect as
+            <select id="cUser"></select>
+            <span class="hint">Redis enforces this user's ACL on top of the mode below.</span>
+          </label>
+        </div>
+
+        <div class="opblock">
+          <h3>Mode</h3>
+          <div class="sub">Each step up is a deliberate choice. Redis itself classifies every
+            command you type &mdash; the tier comes from <span class="mono">COMMAND INFO</span> on
+            the pod you are talking to, so it is correct for that exact version.</div>
+          <div class="choice" id="cModes">
+            <div class="opt sel" data-mode="read">
+              <h3>Read-only</h3>
+              <p>GET, SCAN, INFO, TTL, MEMORY USAGE. Cannot change anything.</p>
+            </div>
+            <div class="opt" data-mode="write">
+              <h3>Read / write</h3>
+              <p>Adds SET, DEL, EXPIRE, LPUSH. Changes application data.</p>
+            </div>
+            <div class="opt" data-mode="admin">
+              <h3>Admin</h3>
+              <p>Adds CONFIG SET, ACL SETUSER, CLIENT KILL. Changes the server.</p>
+            </div>
+          </div>
+          <div id="cUnlock" class="hide">
+            <label>Type the release name <span class="mono" id="cUnlockName"></span> to confirm
+              <input id="cUnlockInput" autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+          <div class="hint warn">
+            Destructive commands are refused in every mode, including admin, with no unlock:
+            <span class="mono">FLUSHALL</span>, <span class="mono">FLUSHDB</span>,
+            <span class="mono">SHUTDOWN</span>, <span class="mono">DEBUG</span>,
+            <span class="mono">REPLICAOF</span>, <span class="mono">FAILOVER</span>,
+            <span class="mono">SWAPDB</span>, <span class="mono">MIGRATE</span>,
+            <span class="mono">CLUSTER RESET</span>. This console has no login of its own, so
+            wiping a keyspace is not something it should be able to do at all.
+          </div>
+        </div>
+
+        <div class="term" id="cTerm"></div>
+        <div class="termline">
+          <span class="prompt mono" id="cPrompt">&gt;</span>
+          <input id="cInput" class="mono" autocomplete="off" spellcheck="false"
+                 placeholder="INFO replication" disabled>
+        </div>
+        <div class="hint">Up / down for history &middot; <span class="mono">clear</span> empties
+          the scrollback &middot; <span class="mono">help</span> lists what each mode allows</div>
+      </div>
+    </section>
+
+  </div>
+
   <div id="tabStatus" class="hide">
     <section class="card">
       <h2>Deployed releases</h2>

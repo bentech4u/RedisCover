@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import deploy, discover as discovery, ocp, operators as ophub
 from . import analyze as keyspace
+from . import cli as rediscli
 from . import day2 as day2ops
 from . import inspect as inspector
 from . import redistests
@@ -469,6 +470,27 @@ def acl_users(namespace: str, name: str, sid: Optional[str] = Cookie(None)):
     from .catalog import ACL_PRESETS
     return {"users": day2ops.list_users(s["kubeconfig"], namespace, name),
             "presets": [{"id": k, **v} for k, v in ACL_PRESETS.items()]}
+
+
+@app.get("/api/cli/pods")
+def cli_pods(namespace: str, name: str, sid: Optional[str] = Cookie(None)):
+    s = _session(sid)
+    return rediscli.pods(s["kubeconfig"], namespace, name)
+
+
+@app.post("/api/cli")
+def run_cli(payload: dict, sid: Optional[str] = Cookie(None)):
+    s = _session(sid)
+    return rediscli.execute(
+        s["kubeconfig"],
+        (payload or {}).get("namespace", ""),
+        (payload or {}).get("name", ""),
+        (payload or {}).get("command", ""),
+        mode=(payload or {}).get("mode", "read"),
+        pod=(payload or {}).get("pod", ""),
+        username=(payload or {}).get("username", ""),
+        password=(payload or {}).get("password", ""),
+    )
 
 
 @app.get("/api/namespaces")
