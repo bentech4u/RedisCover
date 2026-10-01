@@ -2059,6 +2059,7 @@ $('mirrorTest').onclick = async () => {
 /* ------------------------------------------------ day-2 */
 
 let DCUR = null;
+let DSIZES = [];   // distinct PVC sizes, largest first
 
 document.querySelector('.tab[data-tab="day2"]').addEventListener('click', scanForDay2);
 $('dRefresh').onclick = scanForDay2;
@@ -2099,6 +2100,8 @@ function pickDay2(r) {
   // state, and acting on it would silently change something.
   ['dMaxmemory', 'dMemLimit', 'dMemRequest', 'dCpuRequest', 'dCpuLimit',
    'dReplicas', 'dStorage'].forEach(id => $(id).value = '');
+  $('dStorage').placeholder = 'loading…';
+  $('dReplicas').placeholder = 'loading…';
   $('dQosHint').innerHTML = '';
   $('dMemHint').innerHTML = 'Reading the live values…';
   $('dScaleHint').innerHTML = 'Reading the live values…';
@@ -2144,14 +2147,28 @@ function pickDay2(r) {
       const pvcs = st.pvcs || [];
       if (pvcs.length) {
         const sizes = [...new Set(pvcs.map(p => p.capacity).filter(Boolean))];
-        $('dStorage').value = sizes.length === 1 ? sizes[0] : '';
+        // Sizes legitimately differ: grow the PVCs, scale up, and the new
+        // replicas came from the old volumeClaimTemplates. Prefill the LARGEST
+        // so the obvious action is levelling the rest up to it. Blanking the
+        // field here is what made it look stuck on "loading".
+        const sorted = [...sizes].sort((a, b) => toBytes(b) - toBytes(a));
+        DSIZES = sorted;
+        $('dStorage').value = sorted[0] || '';
         const sc = [...new Set(pvcs.map(p => p.storage_class))].join(', ');
+        const mixed = sorted.length > 1
+          ? `<br><strong>These are not all the same size.</strong> Growing to
+             <span class="mono">${sorted[0]}</span> levels the smaller ones up and also
+             rewrites the StatefulSet template, so replicas added later match.`
+          : '';
         $('dStorageHint').innerHTML = `${pvcs.length} volume(s) at
-          <span class="mono">${sizes.join(', ') || '?'}</span> on
+          <span class="mono">${sorted.join(', ') || '?'}</span> on
           <span class="mono">${sc}</span>. Enter a LARGER size &mdash; Kubernetes can grow a
           volume but never shrink it, and only when the StorageClass allows expansion.
-          This is disk for the AOF/RDB files; it does <strong>not</strong> change cache capacity.`;
+          This is disk for the AOF/RDB files; it does <strong>not</strong> change cache
+          capacity.${mixed}`;
       } else {
+        DSIZES = [];
+        $('dStorage').value = '';
         $('dStorageHint').innerHTML = 'No PersistentVolumeClaims found for this release.';
       }
     })
@@ -2159,6 +2176,10 @@ function pickDay2(r) {
       $('dMemHint').textContent = 'Could not read the live values.';
       $('dScaleHint').textContent = 'Could not read the live values.';
       $('dStorageHint').textContent = 'Could not read the live values.';
+      // otherwise the field keeps the "loading…" placeholder and looks stuck
+      DSIZES = [];
+      $('dStorage').placeholder = 'could not read the current size';
+      $('dReplicas').placeholder = 'could not read';
     });
   loadAcl();
   $('dOpCard').classList.remove('hide');
@@ -2186,13 +2207,28 @@ $('dScale').onclick = () => runDay2('scale',
 $('dGrow').onclick = () => {
   const want = $('dStorage').value.trim();
   if (!want) return alert('Enter the new size.');
-  const cur = ($('dStorageHint').textContent.match(/at\s+([\d.]+\s*[GMT]i?)/) || [])[1];
-  if (cur && want.replace(/\s/g, '') === cur.replace(/\s/g, ''))
-    return alert(`That is the size it already is (${cur}). Enter a larger value to grow it.`);
+  const wantB = toBytes(want);
+  if (!wantB) return alert(`"${want}" is not a size Kubernetes understands. Use 10Gi, 50Gi, 1Ti.`);
+
+  // Compare against the LARGEST claim, not the first one listed. With a mixed
+  // set the largest is the only safe floor: anything below it would be a shrink
+  // for at least one volume.
+  const biggest = DSIZES[0];
+  if (biggest && wantB < toBytes(biggest))
+    return alert(`The largest volume is already ${biggest}. Kubernetes can grow a volume `
+      + `but never shrink it, so ${want} would be rejected.`);
+  if (biggest && wantB === toBytes(biggest) && DSIZES.length === 1)
+    return alert(`That is the size it already is (${biggest}). Enter a larger value to grow it.`);
+
+  const levelling = DSIZES.length > 1 && wantB === toBytes(biggest);
   return runDay2('storage',
   { storage_size: want },
-  `Grow every PVC of ${DCUR.namespace}/${DCUR.name} to ${want}?\n\n` +
-  `This cannot be undone — Kubernetes can grow a volume but never shrink it.`);
+  (levelling
+    ? `Level every PVC of ${DCUR.namespace}/${DCUR.name} up to ${want}?\n\n`
+      + `Currently ${DSIZES.join(', ')}. The ones already at ${want} are left alone.\n\n`
+    : `Grow every PVC of ${DCUR.namespace}/${DCUR.name} to ${want}?\n\n`) +
+  `The StatefulSet template is rewritten too, so replicas added later match.\n`
+  + `This cannot be undone — Kubernetes can grow a volume but never shrink it.`);
 };
 
 $('dBump').onclick = () => runDay2('image',
