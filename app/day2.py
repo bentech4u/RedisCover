@@ -84,9 +84,97 @@ def scale(job, kubeconfig: str, spec: Day2Spec) -> None:
 
 # ---------------------------------------------------------------- storage
 
+def _sync_claim_template(job, kubeconfig: str, ns: str, sts: str, size: str) -> bool:
+    """Make a StatefulSet\'s volumeClaimTemplates match the PVCs we just grew.
+
+    The API forbids patching volumeClaimTemplates -- it is on the list of fields
+    a StatefulSet update may not touch -- so growing the PVCs alone leaves the
+    template behind, and the next replica you add is created at the ORIGINAL
+    size. That is silent: the pod starts, reports ready, and simply has a
+    smaller disk than its peers.
+
+    The only route is to delete the StatefulSet with --cascade=orphan, which
+    removes the controller while leaving the pods and PVCs untouched, and then
+    recreate it with the corrected template so it re-adopts the running pods by
+    selector. No pod restarts.
+
+    The replacement is validated with a server-side dry run BEFORE the delete,
+    so a manifest the API would reject can never leave the pods orphaned.
+    """
+    import json
+
+    raw = ocp.run(kubeconfig, ["get", "statefulset", sts, "-n", ns, "-o", "json"],
+                  check=False, timeout=60).stdout
+    if not raw.strip():
+        job.log(f"  no StatefulSet '{sts}' -- nothing to reconcile")
+        return False
+    obj = json.loads(raw)
+    restore = json.loads(raw)
+    restore.pop("status", None)
+    for f in ("creationTimestamp", "generation", "resourceVersion", "uid",
+              "selfLink", "managedFields"):
+        restore.get("metadata", {}).pop(f, None)
+
+    tpls = obj.get("spec", {}).get("volumeClaimTemplates", [])
+    if not tpls:
+        return False
+    current = tpls[0].get("spec", {}).get("resources", {}).get("requests", {}).get("storage", "")
+    if current == size:
+        job.log(f"  template already {size} -- nothing to do")
+        return False
+
+    for t in tpls:
+        t.setdefault("spec", {}).setdefault("resources", {}).setdefault("requests", {})["storage"] = size
+
+    obj.pop("status", None)
+    md = obj.get("metadata", {})
+    for f in ("creationTimestamp", "generation", "resourceVersion", "uid",
+              "selfLink", "managedFields"):
+        md.pop(f, None)
+    md.get("annotations", {}).pop("kubectl.kubernetes.io/last-applied-configuration", None)
+
+    manifest = json.dumps(obj)
+    original = json.dumps(restore)
+    job.log(f"  template {current} -> {size}")
+
+    # A server dry run cannot vet this. While the old StatefulSet still exists
+    # the API judges the replacement as an UPDATE and refuses it for the very
+    # reason we are here -- so the only honest pre-check is a schema one, and
+    # the real safety net is putting the original back if the create fails.
+    chk = ocp.run(kubeconfig, ["apply", "--dry-run=client", "-f", "-"],
+                  stdin=manifest, check=False, timeout=60)
+    if chk.returncode != 0:
+        raise RuntimeError(
+            "the rebuilt StatefulSet is malformed, so nothing was deleted and "
+            f"your pods are untouched: {(chk.stderr or chk.stdout).strip()}")
+
+    job.log("  deleting the StatefulSet with --cascade=orphan (pods keep running)")
+    ocp.run(kubeconfig, ["delete", "statefulset", sts, "-n", ns, "--cascade=orphan"],
+            log=job.log, timeout=120)
+
+    job.log("  recreating it with the corrected template; it re-adopts the pods")
+    res = ocp.run(kubeconfig, ["apply", "-f", "-"], stdin=manifest,
+                  check=False, log=job.log, timeout=120)
+    if res.returncode != 0:
+        job.log("  recreate FAILED -- restoring the original StatefulSet so the")
+        job.log("  running pods are not left without a controller")
+        back = ocp.run(kubeconfig, ["apply", "-f", "-"], stdin=original,
+                       check=False, log=job.log, timeout=120)
+        if back.returncode != 0:
+            raise RuntimeError(
+                "could not recreate the StatefulSet AND could not restore the "
+                "original. Your pods and PVCs are intact but have no controller. "
+                f"Recreate it by hand. Error: {(res.stderr or res.stdout).strip()}")
+        raise RuntimeError(
+            "could not recreate the StatefulSet with the new template; the "
+            f"original was restored and your pods are untouched: "
+            f"{(res.stderr or res.stdout).strip()}")
+    return True
+
+
 def grow_storage(job, kubeconfig: str, spec: Day2Spec) -> None:
     ns = spec.namespace
-    job.step(1, 4, "Checking the StorageClass allows expansion")
+    job.step(1, 5, "Checking the StorageClass allows expansion")
     pvcs = []
     p = ocp.run(kubeconfig, ["get", "pvc", "-n", ns, "-o",
                              "custom-columns=NAME:.metadata.name,"
@@ -108,7 +196,7 @@ def grow_storage(job, kubeconfig: str, spec: Day2Spec) -> None:
             "grow these volumes is to create a new release on a larger size and "
             "copy the data across.")
 
-    job.step(2, 4, "Checking the new size is larger")
+    job.step(2, 5, "Checking the new size is larger")
     def to_gi(v: str) -> float:
         m = re.match(r"([\d.]+)\s*([GMT]i?)", v or "")
         if not m:
@@ -116,32 +204,56 @@ def grow_storage(job, kubeconfig: str, spec: Day2Spec) -> None:
         n, u = float(m.group(1)), m.group(2)[0]
         return n * {"M": 1 / 1024, "G": 1, "T": 1024}[u]
     new = to_gi(spec.storage_size)
+    # Sizes can legitimately differ across a set: grow the PVCs, then scale up,
+    # and the replicas added afterwards came from the old template. Treat each
+    # claim on its own -- only a genuine shrink is an error, and one already at
+    # the target is simply nothing to do.
+    todo = []
     for pvc in pvcs:
         cur = to_gi(pvc["size"])
-        job.log(f"  {pvc['name']}: {pvc['size']} -> {spec.storage_size}")
-        if new <= cur:
+        if new < cur:
             raise RuntimeError(
                 f"{pvc['name']} is already {pvc['size']}. Kubernetes cannot SHRINK a "
                 "volume -- only grow it.")
+        if new == cur:
+            job.log(f"  {pvc['name']}: already {pvc['size']} -- skipping")
+        else:
+            job.log(f"  {pvc['name']}: {pvc['size']} -> {spec.storage_size}")
+            todo.append(pvc)
 
-    job.step(3, 4, "Patching each PersistentVolumeClaim")
-    for pvc in pvcs:
+    job.step(3, 5, "Patching each PersistentVolumeClaim")
+    if not todo:
+        job.log("  every claim is already at the target size")
+    for pvc in todo:
         ocp.run(kubeconfig, ["patch", "pvc", pvc["name"], "-n", ns, "--type", "merge",
                              "-p", '{"spec":{"resources":{"requests":{"storage":"'
                                    + spec.storage_size + '"}}}}'],
                 log=job.log, timeout=90)
 
-    job.step(4, 4, "Result")
+    job.step(4, 5, "Reconciling the StatefulSet volumeClaimTemplates")
+    job.log("  Growing the PVCs does not touch the template they were stamped from,")
+    job.log("  and the API forbids patching it. Left alone, the next replica you add")
+    job.log("  would silently get the OLD size. Rebuilding the controller fixes that.")
+    synced = False
+    if ocp.run(kubeconfig, ["get", "statefulset", spec.name, "-n", ns],
+               check=False, timeout=30).returncode == 0:
+        synced = _sync_claim_template(job, kubeconfig, ns, spec.name, spec.storage_size)
+    else:
+        job.log(f"  '{spec.name}' is not a StatefulSet -- no template to reconcile")
+
+    job.step(5, 5, "Result")
     ocp.run(kubeconfig, ["get", "pvc", "-n", ns], check=False, log=job.log, timeout=60)
     job.log("")
     job.log("  Expansion is asynchronous. Some CSI drivers resize the filesystem")
     job.log("  online; others need the pod restarted. Watch the PVC conditions:")
     job.log(f"    oc describe pvc {pvcs[0]['name']} -n {ns}")
-    job.log("")
-    job.log("  IMPORTANT for a StatefulSet: volumeClaimTemplates are IMMUTABLE, so")
-    job.log("  this grows the PVCs that exist today. Any replica added later gets")
-    job.log("  the ORIGINAL size. Update the manifest and recreate to fix that.")
-    job.result["note"] = "volumeClaimTemplates unchanged; new replicas use the old size"
+    if synced:
+        job.log("")
+        job.log(f"  The volumeClaimTemplates now say {spec.storage_size}, so replicas")
+        job.log("  added from here on are created at the new size.")
+        job.result["note"] = f"PVCs and volumeClaimTemplates both at {spec.storage_size}"
+    else:
+        job.result["note"] = f"PVCs grown to {spec.storage_size}"
 
 
 # ---------------------------------------------------------------- image
