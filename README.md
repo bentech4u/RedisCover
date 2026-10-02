@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app/static/logo.png" alt="RedisCover" width="300">
+</p>
+
 # RedisCover
 
 **Deploy, size, test and inspect Redis on OpenShift — from one console.**
@@ -49,7 +53,7 @@ typing the release name to confirm.
 | **Operators** | Searches all packages in your cluster's catalog sources, not just Redis. Installs any of them. |
 | **Test** | 15 tests in three tiers, including failure drills that measure the write outage. |
 | **Console** | A `redis-cli` against a real pod. Redis classifies each command you type, so read / write / admin are separated and destructive commands are refused outright. |
-| **Status** | Live `INFO` from a running pod, plus pods, services, storage, policies and events. |
+| **Status** | Live `INFO` from a running pod, plus pods, services, storage, policies and events. Generates the connection handover document for the application team. |
 | **Uninstall** | Discovers what is installed and shows a per-object deletion plan before touching anything. |
 
 ### Screenshots
@@ -297,6 +301,7 @@ app/opstree.py      Opstree custom resources + live CRD schema reads
 app/discover.py     finds what is already installed, and the leftovers
 app/inspect.py      pre-login endpoint and certificate inspection
 app/day2.py         scale, storage, image, memory and ACL operations
+app/handover.py     the application-team connection document
 app/operators.py    OperatorHub search over a cached index
 app/redistests.py   the test suite: registry, runner, report
 app/analyze.py      keyspace analyzer

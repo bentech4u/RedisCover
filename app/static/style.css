@@ -170,3 +170,36 @@ pre{background:#0b0d11;border:1px solid var(--line);border-radius:6px;padding:14
   width: auto;
 }
 .termline input:disabled { color: #6e7681; }
+
+/* ---------- branding ---------- */
+/* The logo is a full lockup -- mark, wordmark and two taglines on a square
+   canvas. Scaled whole into a 26px header it is illegible, and object-fit
+   cannot help: square source into square box crops nothing. So the header
+   zooms into the mark alone via background-size/position (source x 280-960,
+   y 60-740, measured off the artwork), and the full lockup gets room on the
+   login card where its text can actually be read. */
+.logomark {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  background-image: url("/static/logo.png");
+  background-size: 48px 48px;
+  background-position: -11px -2px;
+  background-repeat: no-repeat;
+}
+header h1 .tag {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--dim);
+  margin-left: 8px;
+  letter-spacing: 0;
+}
+@media (max-width: 620px) { header h1 .tag { display: none } }
+.loginlogo {
+  display: block;
+  width: 100%;
+  max-width: 230px;
+  height: auto;
+  margin: 2px auto 18px;
+}

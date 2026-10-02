@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from . import deploy, discover as discovery, ocp, operators as ophub
 from . import analyze as keyspace
 from . import cli as rediscli
+from . import handover as handoverdoc
 from . import day2 as day2ops
 from . import inspect as inspector
 from . import redistests
@@ -470,6 +471,20 @@ def acl_users(namespace: str, name: str, sid: Optional[str] = Cookie(None)):
     from .catalog import ACL_PRESETS
     return {"users": day2ops.list_users(s["kubeconfig"], namespace, name),
             "presets": [{"id": k, **v} for k, v in ACL_PRESETS.items()]}
+
+
+@app.get("/api/handover")
+def handover_doc(namespace: str, name: str, client_namespace: str = "",
+                 sid: Optional[str] = Cookie(None)):
+    """The document the application team gets, built from the live release."""
+    s = _session(sid)
+    st = status(namespace=namespace, name=name, live=True, sid=sid)
+    try:
+        st["acl_users"] = day2ops.list_users(s["kubeconfig"], namespace, name)
+    except Exception:
+        st["acl_users"] = []
+    return handoverdoc.generate(s["kubeconfig"], namespace, name, st,
+                                client_namespace=client_namespace)
 
 
 @app.get("/api/cli/pods")

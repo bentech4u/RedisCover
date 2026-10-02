@@ -634,6 +634,11 @@ async function loadStatus(r) {
   SCUR = r;
   $('sTitle').textContent = r.name ? `${r.namespace}/${r.name}` : r.namespace;
   $('sDetailCard').classList.remove('hide');
+  // only a named release can be handed over; a bare namespace has nothing to describe
+  $('sHandoverCard').classList.toggle('hide', !r.name);
+  $('hOut').classList.add('hide');
+  $('hWarn').innerHTML = '';
+  HDOC = '';
   $('sSpin').classList.remove('hide');
   $('sBody').innerHTML = '';
   $('sLive').innerHTML = '';
@@ -2551,3 +2556,44 @@ $('btnCliScan').onclick = scanForCli;
 document.querySelector('.tab[data-tab="console"]').addEventListener('click', () => {
   if (!CLI.rel) scanForCli();
 });
+
+/* ------------------------------------------------ handover document */
+
+let HDOC = '';
+let HFILE = 'redis-handover.md';
+
+$('hGen').onclick = async () => {
+  if (!SCUR) return showError('Pick a release first.');
+  const ns = $('hClientNs').value.trim();
+  $('hGen').disabled = true;
+  $('hWarn').innerHTML = '<span class="dim"><span class="spin"></span> reading the release…</span>';
+  try {
+    const d = await api('/api/handover?namespace=' + encodeURIComponent(SCUR.namespace)
+      + '&name=' + encodeURIComponent(SCUR.name)
+      + '&client_namespace=' + encodeURIComponent(ns));
+    HDOC = d.markdown || '';
+    $('hDoc').textContent = HDOC;
+    $('hOut').classList.remove('hide');
+    $('hWarn').innerHTML = (d.warnings || []).length
+      ? '<div class="alert w" style="margin-top:12px"><strong>Before you send this:</strong>'
+        + '<ul style="margin:8px 0 0 18px;padding:0">'
+        + d.warnings.map(w => `<li style="margin-bottom:6px">${w}</li>`).join('')
+        + '</ul></div>'
+      : '<div class="alert i" style="margin-top:12px">Nothing to flag.</div>';
+    HFILE = d.filename || 'redis-handover.md';
+  } catch (e) {
+    $('hWarn').innerHTML = `<span class="err">${e.message}</span>`;
+  } finally {
+    $('hGen').disabled = false;
+  }
+};
+
+$('hCopy').onclick = () => navigator.clipboard.writeText(HDOC);
+$('hDownload').onclick = () => {
+  const blob = new Blob([HDOC], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = HFILE;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};

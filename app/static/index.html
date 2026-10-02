@@ -3,13 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenShift Redis Deployer</title>
+<title>RedisCover</title>
+<link rel="icon" href="/static/logo.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
 <header>
-  <h1>OpenShift Redis Deployer</h1>
+  <span class="logomark" role="img" aria-label="RedisCover"></span>
+  <h1>RedisCover <span class="tag">Redis on OpenShift</span></h1>
   <span class="sp"></span>
   <span id="whoami" class="badge hide"></span>
   <button id="btnLogout" class="ghost hide" style="padding:5px 12px">Log out</button>
@@ -21,6 +23,8 @@
 
 <!-- ============ LOGIN ============ -->
 <section id="panelLogin" class="card">
+  <img src="/static/logo.png" alt="RedisCover — deploy, manage and scale Redis on OpenShift"
+       class="loginlogo">
   <h2>Connect to the cluster</h2>
   <div class="sub">Runs <span class="mono">oc login</span> on this machine. The password is used once and never stored &mdash; only the resulting kubeconfig is kept, mode 0600, until you log out.</div>
   <div id="loginErr" class="alert e hide"></div>
@@ -960,6 +964,34 @@
       <div id="sLive"></div>
       <div id="sBody"></div>
       <div class="row"><button class="ghost" id="sReload">Refresh</button></div>
+    </section>
+
+    <section class="card hide" id="sHandoverCard">
+      <h2>Hand over to the application team</h2>
+      <div class="sub">
+        Generates the connection document from this running release &mdash; endpoints,
+        where the password lives, cache size and eviction behaviour, the timeouts their
+        client must set, the errors they have to handle, and what happens when Redis goes
+        away. Read live, so it cannot describe a release that no longer exists.
+      </div>
+      <div class="field" style="max-width:420px">
+        <label>Which namespace will connect?</label>
+        <div class="inline">
+          <input id="hClientNs" list="nsList" placeholder="prod-t24">
+          <button id="hGen">Generate</button>
+        </div>
+        <span class="hint">Used to check the NetworkPolicy actually admits them. A blocked
+          connection hangs rather than being refused, so this is worth knowing before they
+          start testing.</span>
+      </div>
+      <div id="hWarn"></div>
+      <div id="hOut" class="hide">
+        <div class="row">
+          <button class="ghost" id="hCopy" style="padding:6px 12px">Copy</button>
+          <button class="ghost" id="hDownload" style="padding:6px 12px">Download .md</button>
+        </div>
+        <pre id="hDoc" style="margin-top:14px;max-height:520px;overflow:auto"></pre>
+      </div>
     </section>
   </div>
 
