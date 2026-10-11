@@ -385,6 +385,64 @@ def _human(b: float) -> str:
     return f"{b / 1048576:.0f}Mi"
 
 
+def _free_per_node(kubeconfig: str, exclude_ns: str = "",
+                   exclude_label: str = "") -> list[dict]:
+    """CPU and memory still unreserved on each schedulable node.
+
+    Allocatable on its own says nothing about whether a pod will schedule --
+    the scheduler compares a pod's REQUESTS against what is left after every
+    other pod's requests. A node with 3500m allocatable and 3300m already
+    requested has 200m, and a check that only prints allocatable will happily
+    wave through a change that leaves pods Pending.
+
+    The release being changed is excluded from "used": a rolling update
+    releases each pod's reservation before claiming the new one, so counting
+    its current pods would refuse even a REDUCTION in requests.
+    """
+    import json as _j
+    nodes = {n["name"]: {"name": n["name"],
+                         "cpu_alloc": _cpu_cores(n.get("cpu") or "0"),
+                         "mem_alloc": _bytes(n.get("memory") or "0"),
+                         "cpu_used": 0.0, "mem_used": 0}
+             for n in ocp.schedulable_nodes(kubeconfig)}
+    raw = ocp.run(kubeconfig, ["get", "pods", "-A", "-o", "json"],
+                  check=False, timeout=120).stdout or "{}"
+    try:
+        items = _j.loads(raw).get("items", [])
+    except ValueError:
+        items = []
+    for pod in items:
+        if (pod.get("status", {}).get("phase") or "") not in ("Running", "Pending"):
+            continue
+        node = pod.get("spec", {}).get("nodeName") or ""
+        if node not in nodes:
+            continue
+        md = pod.get("metadata", {})
+        if exclude_ns and md.get("namespace") == exclude_ns and exclude_label:
+            if (md.get("labels") or {}).get("app") == exclude_label:
+                continue
+        for c in pod["spec"].get("containers", []):
+            req = (c.get("resources", {}) or {}).get("requests") or {}
+            nodes[node]["cpu_used"] += _cpu_cores(req.get("cpu") or "0")
+            nodes[node]["mem_used"] += _bytes(req.get("memory") or "0")
+    out = []
+    for n in nodes.values():
+        n["cpu_free"] = max(0.0, n["cpu_alloc"] - n["cpu_used"])
+        n["mem_free"] = max(0, n["mem_alloc"] - n["mem_used"])
+        out.append(n)
+    return sorted(out, key=lambda x: -x["cpu_free"])
+
+
+def _cpu_cores(v: str) -> float:
+    v = (v or "").strip()
+    if not v:
+        return 0.0
+    try:
+        return float(v[:-1]) / 1000.0 if v.endswith("m") else float(v)
+    except ValueError:
+        return 0.0
+
+
 def _operator_error(kubeconfig: str, ns: str, name: str) -> str:
     """The newest reconcile error naming this release, for a failed roll.
 
@@ -557,11 +615,32 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
         job.log("  need to roll; only maxmemory is being changed")
     limit_changes = spec_changes
     if limit_changes:
-        job.step(3, 5, "Checking a node can hold it")
-        for n in ocp.schedulable_nodes(kubeconfig):
-            alloc = _bytes((n.get("memory") or "0").replace("Ki", "Ki"))
-            job.log(f"    {n['name']:36s} allocatable {n.get('memory')}")
-        job.log("  (compare the new limit against the free memory on the Cluster tab)")
+        job.step(3, 5, "Can the cluster actually schedule this?")
+        pods_now = len((ocp.jsonpath(
+            kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
+            '{range .items[*]}{.metadata.name}{" "}{end}') or "").split()) or 1
+        need_cpu = _cpu_cores(spec.cpu_request or cur_cpu_req or "0")
+        need_mem = _bytes(spec.memory_request or cur_mem_req or "0")
+        free = _free_per_node(kubeconfig, exclude_ns=ns, exclude_label=name)
+        for n in free:
+            job.log(f"    {n['name']:34s} free {n['cpu_free']:.2f} cpu, "
+                    f"{_human(n['mem_free'])}")
+        # how many of these pods could actually be placed right now
+        seats = 0
+        for n in free:
+            c = int(n["cpu_free"] / need_cpu) if need_cpu else 999
+            m = int(n["mem_free"] / need_mem) if need_mem else 999
+            seats += max(0, min(c, m))
+        job.log(f"  each pod requests {need_cpu:.2f} cpu and {_human(need_mem)}; "
+                f"{pods_now} pod(s) to place, room for {seats}")
+        if seats < pods_now:
+            raise RuntimeError(
+                f"this would leave {pods_now - seats} pod(s) Pending. Each pod "
+                f"requests {need_cpu:.2f} CPU and {_human(need_mem)}, {pods_now} of "
+                f"them, but the schedulable nodes have room for {seats}. Requests are "
+                "what the scheduler reserves -- a limit can exceed what is free, a "
+                "request cannot. Lower the request, or free capacity first. Nothing "
+                "has been changed.")
     else:
         job.step(3, 5, "Limit unchanged -- no pod restart needed")
 
