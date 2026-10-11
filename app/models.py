@@ -210,6 +210,7 @@ class Day2Spec(BaseModel):
 
 
 class BenchSpec(BaseModel):
+    mirror: Optional[MirrorSettings] = None
     kind: Literal["community", "opstree", "enterprise"] = "community"
     namespace: str
     name: str
@@ -230,6 +231,7 @@ class BenchSpec(BaseModel):
     cleanup: bool = False
 
     # Not every Redis image ships redis-benchmark -- the Opstree image carries
-    # only redis-server and redis-cli. When the release's own pods lack it, the
-    # benchmark runs from a throwaway pod built on this image instead.
+    # only redis-server and redis-cli. Setting this ALWAYS runs the load from a
+    # throwaway pod on that image; leaving it blank uses the release's own pods
+    # when they have the binary, and falls back to a default that does.
     bench_image: Optional[str] = None

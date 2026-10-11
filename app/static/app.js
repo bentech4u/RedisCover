@@ -2716,6 +2716,16 @@ function benchWarn() {
   $('bWarn').innerHTML = msg;
 }
 
+$('bImage').oninput = () => {
+  const v = $('bImage').value.trim();
+  $('bImageHint').innerHTML = v
+    ? `Forcing <span class="mono">${v}</span>. A helper pod is used even when the
+       release's own image could have run the benchmark.`
+    : `Left blank: the release's own pods are used when they have
+       <span class="mono">redis-benchmark</span>, otherwise a helper pod on
+       <span class="mono">${mirrorPreview('docker.io/redis:8.2-alpine')}</span>.`;
+};
+
 ['bWrites', 'bCleanup'].forEach(id => $(id).onchange = benchWarn);
 ['bKeyspace', 'bRequests', 'bDatasize'].forEach(id => $(id).oninput = benchWarn);
 $('bCancel').onclick = () => { $('bConfigCard').classList.add('hide'); BCUR = null; };
@@ -2741,6 +2751,7 @@ $('bRun').onclick = async () => {
       keyspace: parseInt($('bKeyspace').value) || 10000,
       endpoint: $('bEndpoint').value,
       bench_image: $('bImage').value.trim() || null,
+      mirror: mirrorSettings(),
       include_writes: writes,
       per_pod: $('bPerPod').checked,
       cleanup: $('bCleanup').checked,

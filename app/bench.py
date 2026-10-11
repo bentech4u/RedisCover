@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from . import manifests, ocp, redistests
+from . import catalog, manifests, ocp, redistests
 
 
 def _yaml(obj: dict) -> str:
@@ -304,12 +304,24 @@ def run(job, kubeconfig: str, spec) -> None:
     # avoids creating anything; but the Opstree image does not ship the binary,
     # and exec'ing it there fails every single run with "not found in $PATH".
     runner_pod, helper, netpol = pods[0], None, ""
-    if _has_benchmark(kubeconfig, ns, pods[0]):
+    # An explicit image is an instruction, not a fallback: honour it even when
+    # the release's own pods could have run the benchmark, so a specific client
+    # version or a reachable mirror can be pinned deliberately.
+    if spec.bench_image:
+        image = spec.bench_image
+        job.log(f"  benchmark image set explicitly: {image}")
+        job.log("  running the load from a helper pod on that image")
+    elif _has_benchmark(kubeconfig, ns, pods[0]):
+        image = ""
         job.log(f"  redis-benchmark found in {pods[0]}; running from there")
     else:
-        image = spec.bench_image or FALLBACK_BENCH_IMAGE
+        image = FALLBACK_BENCH_IMAGE
+        if spec.mirror and spec.mirror.registry:
+            image = catalog.apply_mirror(image, spec.mirror.registry, spec.mirror.mode)
+            job.log(f"  default benchmark image rewritten through the mirror: {image}")
         job.log("  this image has no redis-benchmark (the Opstree image ships")
         job.log("  redis-server and redis-cli only), so the load comes from a helper pod")
+    if image:
         helper = redistests.Client(kubeconfig, ns, job.log, image=image)
         helper.start()
         runner_pod = helper.pod

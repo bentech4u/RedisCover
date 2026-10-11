@@ -1058,11 +1058,13 @@
       <div class="field">
         <label>Benchmark image (optional)</label>
         <input id="bImage" placeholder="docker.io/redis:8.2-alpine">
-        <div class="hint">Only used when the release's own image has no
-          <span class="mono">redis-benchmark</span> &mdash; the Opstree image ships
-          <span class="mono">redis-server</span> and <span class="mono">redis-cli</span>
-          only, so the load is generated from a short-lived helper pod instead. Set this
-          for a mirrored or disconnected registry.</div>
+        <div class="hint" id="bImageHint">Left blank: the release's own pods are used
+          when they have <span class="mono">redis-benchmark</span>, otherwise a helper
+          pod on <span class="mono">docker.io/redis:8.2-alpine</span>. The Opstree image
+          ships <span class="mono">redis-server</span> and
+          <span class="mono">redis-cli</span> only, which is why the fallback exists.
+          Set a value here to force that image &mdash; for a mirrored or disconnected
+          registry, or to pin a particular client version.</div>
       </div>
       <div class="row">
         <label class="chk"><input type="checkbox" id="bPerPod" checked>
