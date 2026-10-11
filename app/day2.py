@@ -404,13 +404,27 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
     job.step(1, 5, "Reading what it has now")
     if spec.kind == "opstree":
         plural = spec.cr_plural or "redisreplications"
+        base = "{.spec.kubernetesConfig.resources"
         cur_lim = ocp.jsonpath(kubeconfig, ["get", plural, name, "-n", ns],
-                               "{.spec.kubernetesConfig.resources.limits.memory}")
+                               base + ".limits.memory}")
+        cur_mem_req = ocp.jsonpath(kubeconfig, ["get", plural, name, "-n", ns],
+                                   base + ".requests.memory}")
+        cur_cpu_lim = ocp.jsonpath(kubeconfig, ["get", plural, name, "-n", ns],
+                                   base + ".limits.cpu}")
+        cur_cpu_req = ocp.jsonpath(kubeconfig, ["get", plural, name, "-n", ns],
+                                   base + ".requests.cpu}")
         cm_name, cm_key = f"{name}-redis-config", "redis-additional.conf"
     else:
         kind, _ = _workload(kubeconfig, ns, name)
+        base = "{.spec.template.spec.containers[0].resources"
         cur_lim = ocp.jsonpath(kubeconfig, ["get", kind, name, "-n", ns],
-                               "{.spec.template.spec.containers[0].resources.limits.memory}")
+                               base + ".limits.memory}")
+        cur_mem_req = ocp.jsonpath(kubeconfig, ["get", kind, name, "-n", ns],
+                                   base + ".requests.memory}")
+        cur_cpu_lim = ocp.jsonpath(kubeconfig, ["get", kind, name, "-n", ns],
+                                   base + ".limits.cpu}")
+        cur_cpu_req = ocp.jsonpath(kubeconfig, ["get", kind, name, "-n", ns],
+                                   base + ".requests.cpu}")
         cm_name, cm_key = f"{name}-config", "redis.conf"
 
     pod = ocp.jsonpath(kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
@@ -456,11 +470,33 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
         if pct > 70:
             job.log("  WARNING: above the 50-70% safe band")
 
-    # ANY pod-spec resource change rolls the pods; maxmemory alone does not
+    # ANY pod-spec resource change rolls the pods; maxmemory alone does not.
+    # Every field must be COMPARED, not merely detected: the form prefills all
+    # of them from the live release, so testing for presence made this true on
+    # every run. The CR was then patched to the values it already had, the
+    # operator saw no change and rolled nothing, and the live CONFIG SET below
+    # was skipped -- leaving maxmemory exactly as it was while reporting
+    # success.
+    def _differs(new: str, cur: str, numeric: bool = True) -> bool:
+        if not new:
+            return False
+        if numeric:
+            try:
+                return _bytes(new) != _bytes(cur)
+            except Exception:
+                pass
+        return new.strip() != (cur or "").strip()
+
     spec_changes = any([
-        bool(new_lim) and _bytes(new_lim) != _bytes(cur_lim),
-        bool(spec.memory_request), bool(spec.cpu_request), bool(spec.cpu_limit),
+        _differs(new_lim, cur_lim),
+        _differs(spec.memory_request or "", cur_mem_req),
+        _differs(spec.cpu_limit or "", cur_cpu_lim, numeric=False),
+        _differs(spec.cpu_request or "", cur_cpu_req, numeric=False),
     ])
+    if not spec_changes and any([new_lim, spec.memory_request,
+                                 spec.cpu_limit, spec.cpu_request]):
+        job.log("  resource fields match what is already set, so the pods do not")
+        job.log("  need to roll; only maxmemory is being changed")
     limit_changes = spec_changes
     if limit_changes:
         job.step(3, 5, "Checking a node can hold it")
@@ -548,6 +584,38 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
         if redis_bytes(new_mm) < float(cur_mm or 0):
             job.log("  NOTE: you LOWERED maxmemory. Redis will evict immediately to fit,")
             job.log("  under the current policy, until it is back under the new ceiling.")
+
+    if new_mm:
+        # Verify rather than assume. Patching a ConfigMap only takes effect on
+        # restart, and a CR patch that changes nothing rolls nothing -- so a
+        # run can do everything it was asked to and still leave the server on
+        # the old value, which is the worst possible outcome to report as
+        # success.
+        job.log("")
+        job.log("  verifying what the servers actually report now")
+        want = redis_bytes(new_mm)
+        pods = (ocp.jsonpath(kubeconfig, ["get", "pods", "-n", ns, "-l", f"app={name}"],
+                             '{range .items[*]}{.metadata.name}{" "}{end}') or "").split()
+        stale = []
+        for p in pods:
+            out = ocp.run(kubeconfig, ["exec", "-n", ns, p, "--", "redis-cli", *auth,
+                                       "CONFIG", "GET", "maxmemory"],
+                          check=False, timeout=45).stdout or ""
+            got = [l.strip() for l in out.splitlines() if l.strip()]
+            live = got[1] if len(got) > 1 else "?"
+            match = live.isdigit() and abs(float(live) - want) < 1
+            job.log(f"    {p}: maxmemory {_human(float(live) if live.isdigit() else 0)}"
+                    f" {'OK' if match else '<-- still the old value'}")
+            if not match:
+                stale.append(p)
+        if stale:
+            raise RuntimeError(
+                f"maxmemory was written to the ConfigMap but {len(stale)} pod(s) are "
+                f"still running the old value: {', '.join(stale)}. A ConfigMap is only "
+                "read at startup, and nothing restarted them. Restart the pods to pick "
+                "it up, or change maxmemory without touching the resource fields so it "
+                "can be applied live with CONFIG SET.")
+        job.log("  every pod confirms the new value")
 
     job.result.update({"maxmemory": new_mm or cur_mm, "memory_limit": new_lim or cur_lim,
                        "restarted": spec_changes})
