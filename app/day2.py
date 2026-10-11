@@ -9,6 +9,7 @@ image tag that does not exist gives ImagePullBackOff rather than an error.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from . import ocp
@@ -384,6 +385,35 @@ def _human(b: float) -> str:
     return f"{b / 1048576:.0f}Mi"
 
 
+def _operator_error(kubeconfig: str, ns: str, name: str) -> str:
+    """The newest reconcile error naming this release, for a failed roll.
+
+    Without this the message can only say "it did not happen"; the operator
+    log already says why, and nobody should have to go and read it.
+    """
+    pod = ocp.jsonpath(kubeconfig, ["get", "pods", "-n", "openshift-operators",
+                                    "-l", "name=redis-operator"],
+                       "{.items[0].metadata.name}")
+    if not pod:
+        out = ocp.run(kubeconfig, ["get", "pods", "-n", "openshift-operators",
+                                   "--no-headers"], check=False, timeout=30).stdout or ""
+        pod = next((l.split()[0] for l in out.splitlines()
+                    if "redis-operator" in l), "")
+    if not pod:
+        return ""
+    raw = ocp.run(kubeconfig, ["logs", "-n", "openshift-operators", pod,
+                               "--tail=60"], check=False, timeout=60).stdout or ""
+    import json as _j
+    for line in reversed(raw.splitlines()):
+        try:
+            d = _j.loads(line)
+        except ValueError:
+            continue
+        if d.get("level") == "error" and d.get("error"):
+            return str(d["error"])[:400]
+    return ""
+
+
 def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
     """Change the CACHE capacity -- which is RAM, not disk.
 
@@ -456,6 +486,34 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
     # cur_mm comes back from CONFIG GET as a plain byte count
     target_mm = redis_bytes(new_mm) if new_mm else float(cur_mm or 0)
     target_lim = k8s_bytes(new_lim) if new_lim else k8s_bytes(cur_lim)
+
+    # Kubernetes forbids a request larger than its limit, but a CRD does not
+    # validate it: the patch succeeds, the operator then cannot build a
+    # StatefulSet from it, and it retries that failure forever while the pods
+    # keep running the old spec. Catch it here, before anything is written.
+    want_mem_lim = new_lim or cur_lim
+    want_mem_req = spec.memory_request or cur_mem_req
+    if want_mem_lim and want_mem_req and _bytes(want_mem_req) > _bytes(want_mem_lim):
+        raise RuntimeError(
+            f"memory request {want_mem_req} is larger than the memory limit "
+            f"{want_mem_lim}. Kubernetes requires request <= limit, so this would be "
+            "rejected when the pod spec is built -- on an operator-managed release "
+            "the custom resource accepts it and the operator then fails to reconcile "
+            "forever, leaving the pods on their old spec. Lower the request, or raise "
+            "the limit above it.")
+    want_cpu_lim = spec.cpu_limit or cur_cpu_lim
+    want_cpu_req = spec.cpu_request or cur_cpu_req
+
+    def _cpu(v: str) -> float:
+        v = (v or "").strip()
+        if not v:
+            return 0.0
+        return float(v[:-1]) / 1000.0 if v.endswith("m") else float(v)
+
+    if want_cpu_lim and want_cpu_req and _cpu(want_cpu_req) > _cpu(want_cpu_lim):
+        raise RuntimeError(
+            f"CPU request {want_cpu_req} is larger than the CPU limit {want_cpu_lim}. "
+            "Kubernetes requires request <= limit.")
 
     job.step(2, 5, "Checking the ratio")
     if target_lim and target_mm:
@@ -559,7 +617,38 @@ def change_memory(job, kubeconfig: str, spec: Day2Spec) -> None:
             patch = _j.dumps({"spec": {"kubernetesConfig": {"resources": body}}})
             ocp.run(kubeconfig, ["patch", plural, name, "-n", ns, "--type", "merge",
                                  "-p", patch], log=job.log, timeout=90)
-            job.log("  the operator rolls the pods")
+            # The CR is only a request. The operator still has to write the
+            # StatefulSet, and the API can refuse it -- in which case the CR
+            # holds a spec that will never be realised and the pods keep
+            # running the old one. Wait for the StatefulSet to actually carry
+            # the new limit before believing it.
+            job.log("  waiting for the operator to apply it to the StatefulSet(s)")
+            want = _bytes(lim.get("memory") or cur_lim or "0")
+            deadline = time.time() + 180
+            applied = False
+            while time.time() < deadline:
+                got = ocp.jsonpath(
+                    kubeconfig, ["get", "statefulset", "-n", ns, "-l", f"app={name}"],
+                    "{range .items[*]}"
+                    "{.spec.template.spec.containers[0].resources.limits.memory}{' '}"
+                    "{end}") or ""
+                vals = [v for v in got.split() if v]
+                if vals and all(abs(_bytes(v) - want) < 1 for v in vals):
+                    applied = True
+                    break
+                time.sleep(5)
+            if not applied:
+                why = _operator_error(kubeconfig, ns, name)
+                raise RuntimeError(
+                    "the custom resource was patched but the operator has not "
+                    "applied it to the StatefulSet. The pods are still on their old "
+                    "spec and the CR now asks for something that was not accepted."
+                    + (f" The operator reports: {why}" if why else
+                       " Check the operator log for the reason."))
+            job.log("  StatefulSet(s) updated; the operator rolls the pods")
+            ocp.run(kubeconfig, ["rollout", "status", f"statefulset/{name}-leader",
+                                 "-n", ns, "--timeout=600s"],
+                    check=False, timeout=660, log=job.log)
         else:
             args = ["set", "resources", f"{kind}/{name}", "-n", ns]
             if lim:
