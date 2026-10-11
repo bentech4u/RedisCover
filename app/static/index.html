@@ -1075,6 +1075,22 @@
           Include writes (SET as well as GET)</label>
       </div>
       <div class="row">
+        <label class="chk"><input type="checkbox" id="bFill">
+          Fill the cache before measuring</label>
+      </div>
+      <div id="bFillRow" class="hide grid g2">
+        <div class="field"><label>Fill to (% of maxmemory)</label>
+          <input id="bFillPct" type="number" value="60" min="1" max="95">
+          <div class="hint">An empty cache cannot show you memory per pod,
+            fragmentation or eviction. This writes until the cache is this full,
+            measuring the real cost per key as it goes.</div></div>
+        <div class="field"><label>Fill value size (bytes)</label>
+          <input id="bFillValue" type="number" value="4096" min="8" max="1048576">
+          <div class="hint">Bigger values reach the target in far fewer keys. A
+            4 KiB value costs about 5 KiB once key, object and allocator rounding
+            are counted.</div></div>
+      </div>
+      <div class="row">
         <label class="chk"><input type="checkbox" id="bCleanup">
           Delete benchmark keys afterwards</label>
       </div>

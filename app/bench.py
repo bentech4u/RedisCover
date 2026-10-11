@@ -251,6 +251,99 @@ def _human(n: int) -> str:
     return f"{n:.1f} TiB"
 
 
+def _fill(job, kubeconfig: str, ns: str, runner_pod: str, host: str, port: int,
+          bench_auth: list[str], auth: list[str], primary: str, spec,
+          cluster: bool) -> None:
+    """Write until the cache reaches a share of maxmemory.
+
+    Two things make a single calculated batch miss badly.
+
+    The per-key cost is not the value size: there is the key string, the robj,
+    the dict entry, and the jemalloc size class the whole thing rounds up into.
+    So it is measured rather than assumed.
+
+    And redis-benchmark picks keys at RANDOM from -r, so N requests do not
+    create N keys -- they create about 63% of them, the coupon-collector
+    ratio. Dividing the memory growth by the request count understates the
+    cost per key and overshoots the target, which on an allkeys policy means
+    evicting data that was already there. The cost is therefore measured
+    against the DBSIZE delta, and the fill runs in rounds that re-measure as
+    they go rather than trusting one calculation.
+    """
+    mem = _info(kubeconfig, ns, primary, auth, "memory")
+    used = int(mem.get("used_memory", 0) or 0)
+    maxm = int(mem.get("maxmemory", 0) or 0)
+    if not maxm:
+        job.log("  no maxmemory is set on this release, so there is no ceiling to")
+        job.log("  fill towards. Set one on the Day-2 tab first; skipping the fill.")
+        return
+
+    target = int(maxm * spec.fill_to_pct / 100.0)
+    job.log(f"  current {_human(used)} of {_human(maxm)} "
+            f"({100.0 * used / maxm:.1f}%), target {spec.fill_to_pct}% "
+            f"= {_human(target)}")
+    if used >= target:
+        job.log("  already at or above the target; nothing to write")
+        return
+
+    keyspace = 20_000_000          # wide enough that collisions stay rare
+    per_key = float(spec.fill_value_bytes + 96)   # first guess, replaced below
+    batch = 2000
+    for rnd in range(1, 9):
+        before_used = int(_info(kubeconfig, ns, primary, auth, "memory")
+                          .get("used_memory", 0) or 0)
+        before_keys = _dbsize(kubeconfig, ns, primary, auth)
+        if before_used >= target:
+            break
+        remaining = target - before_used
+        if rnd == 1:
+            job.log(f"  round {rnd}: calibrating with {batch:,} writes")
+        else:
+            # aim slightly under and let the next round close the gap: going
+            # over on an allkeys policy evicts data that was already there
+            batch = max(1000, min(5_000_000, int(remaining / per_key * 0.92)))
+            job.log(f"  round {rnd}: {_human(remaining)} to go, "
+                    f"~{per_key:.0f} B/key -> {batch:,} writes")
+        _bench(job, kubeconfig, ns, runner_pod, host, port, bench_auth, "set",
+               _FillSpec(batch, spec.fill_value_bytes, keyspace, spec.clients),
+               cluster, f"fill round {rnd}")
+
+        after_used = int(_info(kubeconfig, ns, primary, auth, "memory")
+                         .get("used_memory", 0) or 0)
+        after_keys = _dbsize(kubeconfig, ns, primary, auth)
+        grew, made = after_used - before_used, after_keys - before_keys
+        if made > 0 and grew > 0:
+            # per DISTINCT key, not per request
+            per_key = grew / float(made)
+        job.log(f"    +{made:,} keys, +{_human(max(grew, 0))} "
+                f"({per_key:.0f} B/key) -> {100.0 * after_used / maxm:.1f}% full")
+        if grew <= 0:
+            job.log("    memory stopped growing: the cache is evicting as fast as")
+            job.log("    it is being written. That IS the ceiling; stopping here.")
+            break
+        if after_used >= target:
+            break
+
+    final = int(_info(kubeconfig, ns, primary, auth, "memory")
+                .get("used_memory", 0) or 0)
+    job.log(f"  final {_human(final)} of {_human(maxm)} "
+            f"({100.0 * final / maxm:.1f}%)")
+    ev = _info(kubeconfig, ns, primary, auth, "stats").get("evicted_keys", "0")
+    if ev and ev != "0":
+        job.log(f"  {ev} key(s) evicted so far -- the eviction policy is active")
+
+
+class _FillSpec:
+    """The handful of fields _bench reads, so a fill can reuse it."""
+
+    def __init__(self, requests: int, datasize: int, keyspace: int, clients: int):
+        self.requests = requests
+        self.datasize = datasize
+        self.keyspace = keyspace
+        self.clients = clients
+        self.pipeline = 16          # filling is bulk work, not a latency test
+
+
 def _snapshot(job, kubeconfig: str, ns: str, pods: list[str], auth: list[str],
               label: str) -> dict[str, dict]:
     job.log(f"  {label}:")
@@ -274,6 +367,12 @@ def _snapshot(job, kubeconfig: str, ns: str, pods: list[str], auth: list[str],
                      # cache fullness, and how close RSS is to being OOMKilled
                      "pct_maxmemory": (100.0 * used / maxm) if maxm else 0.0,
                      "pct_limit": (100.0 * rss / limit) if limit else 0.0,
+                     # these two are the whole reason a primary can hold more
+                     # memory than a replica holding exactly the same dataset
+                     "clients_slaves": int(mem.get("mem_clients_slaves", 0) or 0),
+                     "clients_normal": int(mem.get("mem_clients_normal", 0) or 0),
+                     "dataset": int(mem.get("used_memory_dataset", 0) or 0),
+                     "connected": 0,
                      "keys": keys, "role": role}
         pm = f"{snap[pod]['pct_maxmemory']:.1f}% of maxmemory" if maxm else "no maxmemory"
         pl = f"{snap[pod]['pct_limit']:.1f}% of limit" if limit else "no limit"
@@ -411,6 +510,16 @@ def run(job, kubeconfig: str, spec) -> None:
     before = _snapshot(job, kubeconfig, ns, pods, auth, "per pod")
 
     try:
+        if spec.fill_to_pct:
+            job.log("")
+            job.log("===== filling the cache before measuring =====")
+            primary = next((p for p in pods
+                            if before.get(p, {}).get("role") == "primary"), pods[0])
+            _fill(job, kubeconfig, ns, runner_pod, bench_host, t.port,
+                  bench_auth, auth, primary, spec, cluster)
+            # the fill changed everything the earlier snapshot recorded
+            before = _snapshot(job, kubeconfig, ns, pods, auth, "after the fill")
+
         job.step(3, total, "Throughput through the Service endpoint(s)")
         if spec.include_writes:
             job.log("  WRITES ENABLED -- this inserts keys into the live keyspace.")
@@ -642,6 +751,43 @@ def _report(ns, name, t, spec, before, after, agg, per_pod, cluster, slots,
           f"{af.get('rss', '?')} | {af.get('pct_limit', 0):.1f}% | "
           f"{af.get('frag', '?')} |")
     a("")
+    roles = {p: after[p].get("role") for p in after}
+    prim = [p for p in after if roles.get(p) == "primary"]
+    reps = [p for p in after if roles.get(p) == "replica"]
+    if prim and reps:
+        pu = after[prim[0]]["used_bytes"]
+        ru = max(after[r]["used_bytes"] for r in reps)
+        buf = after[prim[0]].get("clients_slaves", 0)
+        a("### Why the primary can hold more than its replicas")
+        a("")
+        a("Both hold the **same dataset** -- replication is a full copy, not a "
+          "split -- so at rest their memory should match. On this run the primary "
+          f"was at {_human(pu)} and the largest replica at {_human(ru)}"
+          + (f", a difference of {_human(pu - ru)}." if pu > ru else "."))
+        a("")
+        a("A primary carries two things a replica does not:")
+        a("")
+        a(f"* **Replica output buffers** -- one per replica, holding the "
+          f"replication stream in flight. Currently {_human(buf)}, but this grows "
+          f"with the write rate and is the usual reason a primary looks fatter "
+          f"during a burst and normal again afterwards. It sits OUTSIDE "
+          f"`maxmemory`: Redis excludes it before deciding whether to evict, so "
+          f"it counts against the container limit without counting against the "
+          f"cache.")
+        a("* **Every client connection**, if the application points reads and "
+          "writes at the write endpoint. Each connection has input and output "
+          "buffers on whichever pod it is attached to. An application configured "
+          "with a single host puts all of them on the primary and leaves the "
+          "replicas with no clients at all -- which is what an idle replica "
+          "beside a busy primary actually means.")
+        a("")
+        conns = {p: after[p].get("clients_normal", 0) for p in sorted(after)}
+        if any(conns.values()):
+            a("Client buffer memory per pod right now: "
+              + ", ".join(f"`{p}` {_human(v)}" for p, v in conns.items() if v)
+              + ". A replica showing none is receiving no client traffic.")
+            a("")
+
     hot = [p for p in after if after[p].get("pct_limit", 0) >= 80]
     if hot:
         a(f"**{len(hot)} pod(s) above 80% of the container memory limit.** RSS, not "

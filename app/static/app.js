@@ -1,6 +1,22 @@
 const $ = (id) => document.getElementById(id);
 // A failed call used to reject with nothing listening, so a dead session made
 // every button look broken. Surface it instead.
+function detailText(detail) {
+  if (!detail) return '';
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(d => {
+      const field = Array.isArray(d.loc)
+        ? d.loc.filter(x => x !== 'body').join('.')
+        : (d.loc || '');
+      const got = d.input !== undefined ? ` (you entered ${JSON.stringify(d.input)})` : '';
+      return field ? `${field}: ${d.msg}${got}` : `${d.msg}${got}`;
+    }).join('; ');
+  }
+  if (typeof detail === 'object') return detail.msg || JSON.stringify(detail);
+  return String(detail);
+}
+
 function showError(msg, kind = 'e') {
   let el = document.getElementById('globalErr');
   if (!el) {
@@ -41,8 +57,12 @@ const api = async (path, opts = {}) => {
     throw new Error('Not logged in');
   }
   if (!r.ok) {
-    showError(typeof body.detail === 'string' ? body.detail : r.statusText);
-    throw new Error(body.detail || r.statusText);
+    // FastAPI returns 422 as a LIST of {loc, msg, input}. Passing that straight
+    // to Error() renders "[object Object]" and tells you nothing about which
+    // field was rejected or why.
+    const msg = detailText(body.detail) || r.statusText;
+    showError(msg);
+    throw new Error(msg);
   }
   return body;
 };
@@ -2699,6 +2719,13 @@ function benchWarn() {
     : `${n.toLocaleString()} reads, no data written.`;
 
   let msg = '';
+  if ($('bFill').checked) {
+    msg += `<div class="alert e"><strong>Filling writes a lot of data.</strong>
+      It writes until the cache reaches ${parseInt($('bFillPct').value) || 60}% of
+      <span class="mono">maxmemory</span>. On an <span class="mono">allkeys-*</span>
+      policy, everything already cached competes with it for room and real keys get
+      evicted. Do this on a lab release, not on one an application is using.</div>`;
+  }
   if (w) {
     msg += `<div class="alert w"><strong>Writes touch the live keyspace.</strong>
       redis-benchmark writes keys named <span class="mono">key:&lt;n&gt;</span>. On an
@@ -2726,6 +2753,10 @@ $('bImage').oninput = () => {
        <span class="mono">${mirrorPreview('docker.io/redis:8.2-alpine')}</span>.`;
 };
 
+$('bFill').onchange = () => {
+  $('bFillRow').classList.toggle('hide', !$('bFill').checked);
+  benchWarn();
+};
 ['bWrites', 'bCleanup'].forEach(id => $(id).onchange = benchWarn);
 ['bKeyspace', 'bRequests', 'bDatasize'].forEach(id => $(id).oninput = benchWarn);
 $('bCancel').onclick = () => { $('bConfigCard').classList.add('hide'); BCUR = null; };
@@ -2753,6 +2784,8 @@ $('bRun').onclick = async () => {
       bench_image: $('bImage').value.trim() || null,
       mirror: mirrorSettings(),
       include_writes: writes,
+      fill_to_pct: $('bFill').checked ? (parseInt($('bFillPct').value) || 60) : null,
+      fill_value_bytes: parseInt($('bFillValue').value) || 4096,
       per_pod: $('bPerPod').checked,
       cleanup: $('bCleanup').checked,
     }),

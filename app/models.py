@@ -217,7 +217,7 @@ class BenchSpec(BaseModel):
     topology: Optional[str] = None
 
     requests: int = Field(default=20000, ge=1000, le=2000000)
-    clients: int = Field(default=20, ge=1, le=500)
+    clients: int = Field(default=20, ge=1, le=5000)
     datasize: int = Field(default=64, ge=1, le=1048576)   # bytes per value
     pipeline: int = Field(default=1, ge=1, le=256)
     keyspace: int = Field(default=10000, ge=1, le=10000000)
@@ -225,6 +225,12 @@ class BenchSpec(BaseModel):
     # which Service to drive. "write" is the primary-only endpoint, "read" the
     # one that load-balances across every pod, "both" runs each and compares.
     endpoint: Literal["write", "read", "both"] = "write"
+
+    # Write until the cache reaches this share of maxmemory, before measuring.
+    # The point is to observe behaviour under pressure -- memory per pod,
+    # fragmentation, eviction -- which an empty cache cannot show.
+    fill_to_pct: Optional[int] = Field(default=None, ge=1, le=95)
+    fill_value_bytes: int = Field(default=4096, ge=8, le=1048576)
 
     include_writes: bool = False   # SET as well as GET -- touches live data
     per_pod: bool = True
