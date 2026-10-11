@@ -474,6 +474,24 @@ def acl_users(namespace: str, name: str, sid: Optional[str] = Cookie(None)):
             "presets": [{"id": k, **v} for k, v in ACL_PRESETS.items()]}
 
 
+@app.get("/api/bench/report/{job_id}")
+def bench_report(job_id: str, sid: Optional[str] = Cookie(None)):
+    """Serve the HTML report as a real document.
+
+    An iframe srcdoc carries the whole report in an attribute, which some
+    browsers and extensions decline to render and which cannot be opened in a
+    tab or printed on its own. Serving it means the iframe has a normal URL.
+    """
+    _session(sid)
+    job = deploy.JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "No such job")
+    html = (job.result or {}).get("report_html")
+    if not html:
+        raise HTTPException(404, "That job has no HTML report")
+    return HTMLResponse(html)
+
+
 @app.post("/api/bench/run")
 def run_bench(spec: BenchSpec, sid: Optional[str] = Cookie(None)):
     s = _session(sid)

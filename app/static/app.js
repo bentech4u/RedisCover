@@ -2748,16 +2748,22 @@ $('bRun').onclick = async () => {
   document.querySelector('.tab[data-tab="deploy"]').click();
   // streamJob calls back as (status, result)
   streamJob(j.job_id, (status, res) => {
-    if (status === 'succeeded' && res && res.report) {
-      BREPORT = res.report;
-      BHTML = res.report_html || '';
-      $('bReport').textContent = BREPORT;
-      // srcdoc keeps the report self-contained; no server round trip, no origin
-      $('bHtml').srcdoc = BHTML;
-      $('bReportCard').classList.remove('hide');
-      document.querySelector('.tab[data-tab="bench"]').click();
-      $('bReportCard').scrollIntoView({ behavior: 'smooth' });
+    if (status !== 'succeeded') return;
+    if (!res || !res.report) {
+      showError('The benchmark finished but returned no report.');
+      return;
     }
+    BREPORT = res.report;
+    BHTML = res.report_html || '';
+    $('bReport').textContent = BREPORT;
+    // a served URL rather than srcdoc: it renders everywhere, and the report
+    // can be opened in its own tab or printed
+    $('bHtml').src = `/api/bench/report/${j.job_id}`;
+    $('bOpen').href = `/api/bench/report/${j.job_id}`;
+    $('bOpen').classList.toggle('hide', !BHTML);
+    $('bReportCard').classList.remove('hide');
+    document.querySelector('.tab[data-tab="bench"]').click();
+    $('bReportCard').scrollIntoView({ behavior: 'smooth' });
   });
 };
 
