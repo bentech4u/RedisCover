@@ -1055,6 +1055,15 @@
             targets one pod; the read Service load-balances across every pod.</div></div>
       </div>
 
+      <div class="field">
+        <label>Benchmark image (optional)</label>
+        <input id="bImage" placeholder="docker.io/redis:8.2-alpine">
+        <div class="hint">Only used when the release's own image has no
+          <span class="mono">redis-benchmark</span> &mdash; the Opstree image ships
+          <span class="mono">redis-server</span> and <span class="mono">redis-cli</span>
+          only, so the load is generated from a short-lived helper pod instead. Set this
+          for a mirrored or disconnected registry.</div>
+      </div>
       <div class="row">
         <label class="chk"><input type="checkbox" id="bPerPod" checked>
           Measure each pod separately</label>

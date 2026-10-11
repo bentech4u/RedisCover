@@ -2740,6 +2740,7 @@ $('bRun').onclick = async () => {
       pipeline: parseInt($('bPipeline').value) || 1,
       keyspace: parseInt($('bKeyspace').value) || 10000,
       endpoint: $('bEndpoint').value,
+      bench_image: $('bImage').value.trim() || null,
       include_writes: writes,
       per_pod: $('bPerPod').checked,
       cleanup: $('bCleanup').checked,
@@ -2748,8 +2749,10 @@ $('bRun').onclick = async () => {
   document.querySelector('.tab[data-tab="deploy"]').click();
   // streamJob calls back as (status, result)
   streamJob(j.job_id, (status, res) => {
-    if (status !== 'succeeded') return;
+    // a failed run still carries valid memory and distribution sections, so
+    // show whatever report exists rather than discarding it with the error
     if (!res || !res.report) {
+      if (status !== 'succeeded') return;   // the job log already says why
       showError('The benchmark finished but returned no report.');
       return;
     }

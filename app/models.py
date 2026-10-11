@@ -228,3 +228,8 @@ class BenchSpec(BaseModel):
     include_writes: bool = False   # SET as well as GET -- touches live data
     per_pod: bool = True
     cleanup: bool = False
+
+    # Not every Redis image ships redis-benchmark -- the Opstree image carries
+    # only redis-server and redis-cli. When the release's own pods lack it, the
+    # benchmark runs from a throwaway pod built on this image instead.
+    bench_image: Optional[str] = None

@@ -14,12 +14,71 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from . import ocp, redistests
+from . import manifests, ocp, redistests
+
+
+def _yaml(obj: dict) -> str:
+    return manifests.dump([obj])
 
 # redis-benchmark names its keys key:__rand_int__, so with -r it writes
 # key:000000000001 .. key:<keyspace>. Cleanup targets exactly that prefix and
 # nothing else, and still shows the count before deleting.
 BENCH_KEY_GLOB = "key:*"
+
+# redis-benchmark ships with the upstream Redis image but not with every
+# distribution of it; the Opstree image carries redis-server and redis-cli
+# only. Falling back to a pod that does have it keeps the Opstree topologies
+# benchmarkable without asking anyone to rebuild an image.
+FALLBACK_BENCH_IMAGE = "docker.io/redis:8.2-alpine"
+
+
+def _bench_netpol(ns: str, policy: str, pod_label: str, pod_value: str,
+                  ports: list[int]) -> dict:
+    """Let the helper pod through the release's NetworkPolicy.
+
+    The policy admits named client namespaces, the operator, and peers labelled
+    app=<release>. A helper pod matches none of those, so its packets are
+    dropped -- and a dropped connection HANGS until the client gives up rather
+    than being refused, which looks like a slow Redis and wastes the whole run.
+
+    Labelling the helper app=<release> would fix the policy and break something
+    worse: the release's Services select that label too, so the helper would be
+    added as a Service endpoint and real clients would be routed to a pod with
+    no redis-server in it. Hence a policy of its own, removed with the pod.
+    """
+    return {
+        "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+        "metadata": {"name": policy, "namespace": ns,
+                     "labels": {"app.kubernetes.io/managed-by": "redis-deployer"}},
+        "spec": {
+            "podSelector": {},
+            "policyTypes": ["Ingress"],
+            "ingress": [{
+                "from": [{"podSelector": {"matchLabels": {pod_label: pod_value}}}],
+                "ports": [{"protocol": "TCP", "port": p} for p in ports],
+            }],
+        },
+    }
+
+
+def _reachable(kubeconfig: str, ns: str, from_pod: str, host: str, port: int,
+               auth: list[str]) -> tuple[bool, str]:
+    """One short PING before committing to a long benchmark.
+
+    redis-cli has no connect timeout, so this is wrapped in `timeout`: a
+    NetworkPolicy drop would otherwise sit here for the full benchmark duration
+    and report nothing.
+    """
+    p = ocp.run(kubeconfig, ["exec", "-n", ns, from_pod, "--", "timeout", "8",
+                             "redis-cli", "-h", host, "-p", str(port), *auth,
+                             "PING"], check=False, timeout=30)
+    out = ((p.stdout or "") + (p.stderr or "")).strip()
+    return ("PONG" in out.upper()), out
+
+
+def _has_benchmark(kubeconfig: str, ns: str, pod: str) -> bool:
+    return ocp.run(kubeconfig, ["exec", "-n", ns, pod, "--", "which", "redis-benchmark"],
+                   check=False, timeout=30).returncode == 0
 
 
 def _csv_rows(out: str) -> list[dict[str, Any]]:
@@ -88,20 +147,39 @@ def endpoints(kubeconfig: str, ns: str, name: str) -> dict[str, Optional[str]]:
     """
     raw = ocp.run(kubeconfig, ["get", "svc", "-n", ns, "-l", f"app={name}", "-o",
                                "custom-columns=N:.metadata.name,IP:.spec.clusterIP,"
-                               "SEL:.spec.selector", "--no-headers"],
+                               "ROLE:.metadata.labels.role,SEL:.spec.selector",
+                               "--no-headers"],
                   check=False, timeout=60).stdout or ""
-    write = read = None
+    leaders, followers, plain, pinned = [], [], [], []
     for line in raw.splitlines():
-        parts = line.split(None, 2)
+        parts = line.split(None, 3)
         if len(parts) < 3:
             continue
-        nm, ip, sel = parts
-        if "statefulset.kubernetes.io/pod-name" in sel:
-            write = nm
-        elif ip in ("None", "<none>"):
-            continue                      # headless
+        nm, ip, role = parts[0], parts[1], parts[2]
+        sel = parts[3] if len(parts) > 3 else ""
+        if ip in ("None", "<none>"):
+            continue                                  # headless
+        if role == "leader":
+            leaders.append(nm)
+        elif role == "follower":
+            followers.append(nm)
+        elif "statefulset.kubernetes.io/pod-name" in sel:
+            pinned.append(nm)                         # community write Service
         else:
-            read = nm
+            plain.append(nm)
+
+    def _prefer(names: list[str]) -> Optional[str]:
+        # Opstree creates <name>-leader and <name>-leader-additional; the plain
+        # one is the Service clients are meant to use
+        if not names:
+            return None
+        return sorted(names, key=lambda n: (n.endswith("-additional"), len(n)))[0]
+
+    if leaders or followers:
+        # operator-managed: the role label says which is which
+        write, read = _prefer(leaders), _prefer(followers)
+    else:
+        write, read = _prefer(pinned), _prefer(plain)
     if write is None:
         write = read                      # standalone: one Service does both
     return {"write": write, "read": read}
@@ -212,7 +290,61 @@ def run(job, kubeconfig: str, spec) -> None:
     if not pods:
         raise RuntimeError(f"no pods found for {ns}/{name}")
     cluster = t.topology == "cluster"
-    job.log(f"  topology {t.topology} | {len(pods)} pod(s) | endpoint {t.host}:{t.port}")
+    eps = endpoints(kubeconfig, ns, name)
+    domain = ocp.cluster_domain(kubeconfig, ns)
+    # An operator names its Services after the role, not the release, so the
+    # host derived from the release name may not resolve at all.
+    primary_svc = eps.get("write") or eps.get("read")
+    bench_host = f"{primary_svc}.{ns}.svc.{domain}" if primary_svc else t.host
+    job.log(f"  topology {t.topology} | {len(pods)} pod(s) | endpoint {bench_host}:{t.port}")
+    if eps.get("read") and eps.get("read") != eps.get("write"):
+        job.log(f"  write -> {eps['write']}   read -> {eps['read']}")
+
+    # Where redis-benchmark will actually run. Preferring the release's own pod
+    # avoids creating anything; but the Opstree image does not ship the binary,
+    # and exec'ing it there fails every single run with "not found in $PATH".
+    runner_pod, helper, netpol = pods[0], None, ""
+    if _has_benchmark(kubeconfig, ns, pods[0]):
+        job.log(f"  redis-benchmark found in {pods[0]}; running from there")
+    else:
+        image = spec.bench_image or FALLBACK_BENCH_IMAGE
+        job.log("  this image has no redis-benchmark (the Opstree image ships")
+        job.log("  redis-server and redis-cli only), so the load comes from a helper pod")
+        helper = redistests.Client(kubeconfig, ns, job.log, image=image)
+        helper.start()
+        runner_pod = helper.pod
+        if not _has_benchmark(kubeconfig, ns, runner_pod):
+            helper.stop()
+            raise RuntimeError(
+                f"'{image}' does not contain redis-benchmark either. Set a benchmark "
+                "image that does, in the Benchmark tab.")
+        job.log(f"  helper pod {runner_pod} ready")
+
+        if ocp.run(kubeconfig, ["get", "networkpolicy", "-n", ns],
+                   check=False, timeout=30).stdout.strip():
+            netpol = f"rediscover-bench-{runner_pod}"
+            job.log("  a NetworkPolicy guards this namespace and the helper matches")
+            job.log("  none of its allowed peers, so opening it a temporary door")
+            ocp.apply_yaml(kubeconfig, _yaml(
+                _bench_netpol(ns, netpol, "run", runner_pod, [t.port, 16379])),
+                log=job.log)
+
+    ok, why = _reachable(kubeconfig, ns, runner_pod, bench_host, t.port, auth)
+    if not ok:
+        # name it accurately: a DNS failure and a dropped packet need different fixes
+        if "not resolve" in why.lower() or "name or service" in why.lower():
+            cause = ("that name does not resolve, so the Service does not exist "
+                     "under it. Services this release actually has: "
+                     + ", ".join(v for v in eps.values() if v))
+        elif "timed out" in why.lower() or not why:
+            cause = ("the connection hung rather than being refused, which is what "
+                     "a NetworkPolicy drop looks like")
+        else:
+            cause = f"PING returned '{why}'"
+        raise RuntimeError(
+            f"{runner_pod} cannot reach {bench_host}:{t.port} -- {cause}. Nothing "
+            "was benchmarked: every request would have failed the same way.")
+    job.log(f"  {runner_pod} can reach {bench_host}:{t.port}")
 
     if cluster:
         sl = _slots(kubeconfig, ns, pods[0], auth)
@@ -223,69 +355,99 @@ def run(job, kubeconfig: str, spec) -> None:
     job.step(2, total, "Before: memory and key distribution")
     before = _snapshot(job, kubeconfig, ns, pods, auth, "per pod")
 
-    job.step(3, total, "Throughput through the Service endpoint(s)")
-    if spec.include_writes:
-        job.log("  WRITES ENABLED -- this inserts keys into the live keyspace.")
-        job.log(f"  On an eviction policy like allkeys-lru, inserting up to "
-                f"{spec.keyspace:,} keys can evict real application data.")
-        tests = "set,get"
-    else:
-        job.log("  read-only run (GET). Enable writes for SET figures.")
-        tests = "get"
+    try:
+        job.step(3, total, "Throughput through the Service endpoint(s)")
+        if spec.include_writes:
+            job.log("  WRITES ENABLED -- this inserts keys into the live keyspace.")
+            job.log(f"  On an eviction policy like allkeys-lru, inserting up to "
+                    f"{spec.keyspace:,} keys can evict real application data.")
+            tests = "set,get"
+        else:
+            job.log("  read-only run (GET). Enable writes for SET figures.")
+            tests = "get"
 
-    eps = endpoints(kubeconfig, ns, name)
-    domain = ocp.cluster_domain(kubeconfig, ns)
-    wanted = ["write", "read"] if spec.endpoint == "both" else [spec.endpoint]
-    agg_by_ep: dict[str, list[dict]] = {}
-    for which in wanted:
-        svc = eps.get(which)
-        if not svc:
-            job.log(f"  no {which} Service for this release; skipping")
-            continue
-        if which == "read" and not cluster and t.topology == "standalone":
-            job.log("  standalone has no separate read endpoint; skipping")
-            continue
-        host = f"{svc}.{ns}.svc.{domain}"
-        # a write against the read Service lands on a replica and fails READONLY
-        ep_tests = "get" if (which == "read" and spec.include_writes) else tests
-        if ep_tests != tests:
-            job.log("  read endpoint load-balances onto replicas, which refuse "
-                    "writes -- running GET only against it")
-        rows = _bench(job, kubeconfig, ns, pods[0], host, t.port, bench_auth,
-                      ep_tests, spec, cluster, f"{which} endpoint ({svc})")
-        if rows:
-            agg_by_ep[which] = rows
-    agg = agg_by_ep.get("write") or agg_by_ep.get("read") or []
-
-    per_pod: dict[str, list[dict]] = {}
-    if spec.per_pod:
-        job.step(4, total, "Per-pod throughput -- finds the slow node an average hides")
-        for pod in pods:
-            ip = ocp.jsonpath(kubeconfig, ["get", "pod", pod, "-n", ns],
-                              "{.status.podIP}")
-            if not ip:
+        wanted = ["write", "read"] if spec.endpoint == "both" else [spec.endpoint]
+        agg_by_ep: dict[str, list[dict]] = {}
+        for which in wanted:
+            svc = eps.get(which)
+            if not svc:
+                job.log(f"  no {which} Service for this release; skipping")
                 continue
-            # a replica refuses SET, so only ever read directly from a pod
-            per_pod[pod] = _bench(job, kubeconfig, ns, pod, ip, t.port, bench_auth,
-                                  "get", spec, False, pod)
-    else:
-        job.step(4, total, "Per-pod throughput (skipped)")
+            if which == "read" and not cluster and t.topology == "standalone":
+                job.log("  standalone has no separate read endpoint; skipping")
+                continue
+            host = f"{svc}.{ns}.svc.{domain}"
+            # a write against the read Service lands on a replica and fails READONLY
+            ep_tests = "get" if (which == "read" and spec.include_writes) else tests
+            if ep_tests != tests:
+                job.log("  read endpoint load-balances onto replicas, which refuse "
+                        "writes -- running GET only against it")
+            rows = _bench(job, kubeconfig, ns, runner_pod, host, t.port, bench_auth,
+                          ep_tests, spec, cluster, f"{which} endpoint ({svc})")
+            if rows:
+                agg_by_ep[which] = rows
+        agg = agg_by_ep.get("write") or agg_by_ep.get("read") or []
 
-    job.step(5, total, "After: what the run changed")
-    after = _snapshot(job, kubeconfig, ns, pods, auth, "per pod")
+        per_pod: dict[str, list[dict]] = {}
+        if spec.per_pod:
+            job.step(4, total, "Per-pod throughput -- finds the slow node an average hides")
+            # On a cluster, GET against one node redirects: that node owns only
+            # its own slots, so most keys come back MOVED and redis-benchmark
+            # exits rather than following them. PING carries no key, so it
+            # measures the node's round trip without ever being redirected.
+            pod_test = "ping" if cluster else "get"
+            if cluster:
+                job.log("  cluster: measuring PING per node. A keyed command sent to")
+                job.log("  one node returns MOVED for every slot it does not own.")
+            for pod in pods:
+                ip = ocp.jsonpath(kubeconfig, ["get", "pod", pod, "-n", ns],
+                                  "{.status.podIP}")
+                if not ip:
+                    continue
+                # a replica refuses SET, so only ever read directly from a pod
+                rows = _bench(job, kubeconfig, ns, runner_pod, ip, t.port,
+                              bench_auth, pod_test, spec, False, pod)
+                if cluster:
+                    # PING_MBULK matches what a real client's protocol looks like
+                    rows = [r for r in rows if r["test"] == "PING_MBULK"] or rows
+                per_pod[pod] = rows
+        else:
+            job.step(4, total, "Per-pod throughput (skipped)")
 
-    if spec.cleanup:
-        job.step(6, total, "Removing benchmark keys")
-        _cleanup(job, kubeconfig, ns, pods, auth, before, after)
+        job.step(5, total, "After: what the run changed")
+        after = _snapshot(job, kubeconfig, ns, pods, auth, "per pod")
 
-    slots = _slots(kubeconfig, ns, pods[0], auth) if cluster else {}
-    job.result["report"] = _report(ns, name, t, spec, before, after, agg,
-                                   per_pod, cluster, slots, agg_by_ep, eps)
-    job.result["report_html"] = _report_html(ns, name, t, spec, before, after,
-                                             per_pod, cluster, slots, agg_by_ep, eps)
-    job.result["aggregate"] = agg
-    job.log("")
-    job.log("Report ready -- open the Benchmark tab to read or download it.")
+        if spec.cleanup:
+            job.step(6, total, "Removing benchmark keys")
+            _cleanup(job, kubeconfig, ns, pods, auth, before, after)
+
+        slots = _slots(kubeconfig, ns, pods[0], auth) if cluster else {}
+        job.result["report"] = _report(ns, name, t, spec, before, after, agg,
+                                       per_pod, cluster, slots, agg_by_ep, eps)
+        job.result["report_html"] = _report_html(ns, name, t, spec, before, after,
+                                                 per_pod, cluster, slots, agg_by_ep, eps)
+        job.result["aggregate"] = agg
+        job.log("")
+        if not agg_by_ep and not any(per_pod.values()):
+            # the snapshots still succeeded, so a report exists -- but reporting
+            # SUCCESS here is how an empty report reads as a working benchmark
+            raise RuntimeError(
+                "every redis-benchmark run failed, so there are no throughput or "
+                "latency figures. The memory and distribution sections of the report "
+                "are still valid. See the errors above for the cause.")
+        job.log("Report ready -- open the Benchmark tab to read or download it.")
+    finally:
+        if netpol:
+            job.log("")
+            job.log(f"  removing temporary NetworkPolicy {netpol}")
+            ocp.run(kubeconfig, ["delete", "networkpolicy", netpol, "-n", ns,
+                                 "--ignore-not-found"],
+                    check=False, timeout=60, log=job.log)
+        if helper is not None:
+            # the helper is ours, so it goes whatever happened
+            job.log("")
+            job.log(f"  removing helper pod {helper.pod}")
+            helper.stop()
 
 
 def _cleanup(job, kubeconfig, ns, pods, auth, before, after) -> None:
@@ -361,6 +523,13 @@ def _report(ns, name, t, spec, before, after, agg, per_pod, cluster, slots,
         a("")
         a("Each pod benchmarked on its own IP, bypassing the Service.")
         a("")
+        if cluster:
+            a("Measured with **PING**, not GET. A keyed command sent straight to one "
+              "cluster node returns `MOVED` for every slot that node does not own, "
+              "and redis-benchmark stops rather than following the redirect. PING "
+              "measures each node's round trip honestly, but does not exercise the "
+              "data path.")
+            a("")
         if cluster:
             a("The aggregate above spreads across the primaries by hash slot, so it "
               "blends them: a single slow shard is averaged away there and visible "
@@ -591,6 +760,12 @@ def _report_html(ns, name, t, spec, before, after, per_pod, cluster, slots,
     if per_pod:
         a("<div class='card'><h2>Per pod, measured directly</h2>")
         a("<div class='sub'>Each pod benchmarked on its own IP, bypassing the Service.</div>")
+        if cluster:
+            a("<div class='note'>Measured with <strong>PING</strong>, not GET. A keyed "
+              "command sent straight to one cluster node returns <code>MOVED</code> for "
+              "every slot it does not own, and redis-benchmark stops rather than "
+              "following it. PING measures each node's round trip honestly, but does "
+              "not exercise the data path.</div>")
         a("<table><tr><th>Pod</th><th>Role</th><th class='n'>ops/sec</th>"
           "<th class='n'>p50</th><th class='n'>p99</th></tr>")
         rates = {}
