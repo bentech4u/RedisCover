@@ -124,7 +124,7 @@ def _sync_opstree_storage(job, kubeconfig: str, ns: str, spec) -> bool:
     raw = ocp.jsonpath(
         kubeconfig, ["get", "statefulset", "-n", ns, "-l", f"app={spec.name}"],
         '{range .items[*]}{.metadata.name}{" "}'
-        '{.spec.volumeClaimTemplates[0].spec.resources.requests.storage}{"\n"}{end}')
+        r'{.spec.volumeClaimTemplates[0].spec.resources.requests.storage}{"\n"}{end}')
     stale = []
     for line in (raw or "").splitlines():
         parts = line.split()
