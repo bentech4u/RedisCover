@@ -367,14 +367,53 @@ def deploy_enterprise(job: Job, kubeconfig: str, spec: EnterpriseSpec) -> None:
     _approve_installplan(job, kubeconfig, spec.namespace, spec.package)
 
     job.step(5, total, "Waiting for the ClusterServiceVersion")
+    # Ask the SUBSCRIPTION which CSV is ours. A namespace can see more than one
+    # -- an operator installed cluster-wide in openshift-operators shows up in
+    # every namespace -- and taking items[0] picked whichever sorted first.
+    # Here that was the Opstree operator, already Succeeded, so the wait
+    # returned instantly and the deploy went on to create a custom resource
+    # whose CRD had not been registered yet.
+    csv_name = ""
+    deadline = time.time() + 900
+    while time.time() < deadline:
+        csv_name = (ocp.jsonpath(
+            kubeconfig, ["get", "subscription", spec.package,
+                         "-n", spec.namespace], "{.status.installedCSV}")
+            or ocp.jsonpath(
+            kubeconfig, ["get", "subscription", spec.package,
+                         "-n", spec.namespace], "{.status.currentCSV}"))
+        if csv_name:
+            break
+        time.sleep(5)
+    if not csv_name:
+        raise RuntimeError(
+            f"the Subscription '{spec.package}' never named a CSV. The "
+            "operator did not start installing; check the Subscription and the "
+            "catalog source.")
+    job.log(f"  the Subscription names {csv_name}")
     csv = ocp.wait_for(
-        kubeconfig, ["get", "csv", "-n", spec.namespace],
-        "{.items[0].status.phase}", "Succeeded",
+        kubeconfig, ["get", "csv", csv_name, "-n", spec.namespace],
+        "{.status.phase}", "Succeeded",
         timeout=900, label="CSV phase", log=job.log)
-    csv_name = ocp.jsonpath(kubeconfig, ["get", "csv", "-n", spec.namespace],
-                            "{.items[0].metadata.name}")
     job.result["csv"] = csv_name
     job.log(f"  operator installed: {csv_name} ({csv})")
+
+    # A Succeeded CSV does not guarantee the API server is already serving the
+    # kind. Wait for the CRD itself, because that is what the next step needs.
+    job.log("  waiting for the RedisEnterpriseCluster CRD to be served")
+    crd_deadline = time.time() + 300
+    while time.time() < crd_deadline:
+        if ocp.run(kubeconfig, ["get", "crd",
+                                "redisenterpriseclusters.app.redislabs.com"],
+                   check=False, timeout=30).returncode == 0:
+            job.log("  CRD registered")
+            break
+        time.sleep(5)
+    else:
+        raise RuntimeError(
+            f"{csv_name} reports Succeeded but the API server is still not "
+            "serving redisenterpriseclusters.app.redislabs.com, so the cluster "
+            "resource cannot be created. Check the operator's pod and events.")
 
     job.step(6, total, "Creating the RedisEnterpriseCluster")
     rec_objs = enterprise_rec(spec)
