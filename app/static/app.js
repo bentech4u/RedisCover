@@ -2158,6 +2158,7 @@ $('mirrorTest').onclick = async () => {
 /* ------------------------------------------------ day-2 */
 
 let DCUR = null;
+let DIMAGE_CURRENT = '';
 let DSIZES = [];   // distinct PVC sizes, largest first
 
 document.querySelector('.tab[data-tab="day2"]').addEventListener('click', scanForDay2);
@@ -2188,10 +2189,13 @@ async function scanForDay2() {
 function pickDay2(r) {
   DCUR = r;
   $('dTitle').textContent = `${r.namespace}/${r.name}`;
-  $('dImage').value = r.version || '';
-  $('dImageHint').innerHTML = `Currently <span class="mono">${r.version || 'unknown'}</span>.
-    Checked before applying: the cluster must be able to pull it, and a downgrade is refused
-    unless forced &mdash; Redis does not guarantee an older server can read a newer RDB or AOF.`;
+  // A field labelled "New image" must not arrive holding the CURRENT one:
+  // clicking Change without editing is then a guaranteed failure, and a
+  // prefilled value reads as a suggestion rather than as today's state.
+  $('dImage').value = '';
+  $('dImage').placeholder = r.version || 'docker.io/redis:8.2-alpine';
+  DIMAGE_CURRENT = r.version || '';
+  applyDImage();   // owns dImageHint from here; do not overwrite it below
   if (r.topology === 'standalone') {
     $('dScaleHint').innerHTML = 'A standalone release is one pod. Scaling past 1 would give you independent, unsynchronised copies — use the Replication topology instead.';
   }
@@ -2329,6 +2333,28 @@ $('dGrow').onclick = () => {
   `The StatefulSet template is rewritten too, so replicas added later match.\n`
   + `This cannot be undone — Kubernetes can grow a volume but never shrink it.`);
 };
+
+function applyDImage() {
+  const v = $('dImage').value.trim();
+  const same = v && v === DIMAGE_CURRENT;
+  $('dBump').disabled = !v || same;
+  $('dBump').title = !v ? 'Enter an image to change to'
+                    : same ? 'That is the image it is already running' : '';
+  if (same) {
+    $('dImageHint').innerHTML = `<span class="warn">That is the image it is already
+      running.</span> Enter a different tag to change it.`;
+  } else if (v) {
+    $('dImageHint').innerHTML = `Currently <span class="mono">${DIMAGE_CURRENT ||
+      'unknown'}</span> &rarr; <span class="mono">${v}</span>. Checked before applying:
+      the cluster must be able to pull it, and a downgrade is refused unless forced
+      &mdash; Redis does not guarantee an older server can read a newer RDB or AOF.`;
+  } else {
+    $('dImageHint').innerHTML = `Currently <span class="mono">${DIMAGE_CURRENT ||
+      'unknown'}</span>. Leave blank to change nothing. Checked before applying: the
+      cluster must be able to pull it, and a downgrade is refused unless forced.`;
+  }
+}
+$('dImage').oninput = applyDImage;
 
 $('dBump').onclick = () => runDay2('image',
   { image: $('dImage').value.trim(), force: $('dForce').checked },
