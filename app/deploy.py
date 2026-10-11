@@ -533,6 +533,9 @@ def uninstall(job: Job, kubeconfig: str, spec: UninstallSpec) -> None:
     job.log(f"  workload objects      : yes")
     job.log(f"  PersistentVolumeClaims: {'YES -- DATA IS DESTROYED' if spec.delete_pvc else 'no (kept)'}")
     job.log(f"  namespace             : {'YES -- EVERYTHING IN IT' if spec.delete_namespace else 'no (kept)'}")
+    if spec.kind == "opstree":
+        job.log(f"  operator RBAC supplement: "
+                f"{'yes, if no other release needs it' if spec.delete_operator_rbac else 'no (kept)'}")
 
     if spec.kind == "opstree":
         job.step(1, 3, "Deleting the custom resource")
@@ -547,6 +550,25 @@ def uninstall(job: Job, kubeconfig: str, spec: UninstallSpec) -> None:
                                  "app.kubernetes.io/managed-by=redis-deployer",
                                  "--ignore-not-found"],
                     check=False, timeout=180, log=job.log)
+
+        if spec.delete_operator_rbac:
+            job.log("")
+            job.log("  checking whether any other Opstree release still needs the")
+            job.log("  supplementary ClusterRole -- it is cluster-scoped and shared, so")
+            job.log("  removing it while another release exists would break that one")
+            others = ot.other_crs_exist(kubeconfig, ns, spec.name, plural)
+            if others:
+                job.log(f"  KEEPING it: {len(others)} other Opstree release(s) rely on it")
+                for o in others:
+                    job.log(f"    - {o}")
+            else:
+                job.log("  no other Opstree releases; removing it")
+                for kind in ("clusterrole", "clusterrolebinding"):
+                    ocp.run(kubeconfig,
+                            ["delete", kind, ot.RBAC_SUPPLEMENT_NAME,
+                             "--ignore-not-found"],
+                            check=False, timeout=120, log=job.log)
+                job.log("  the operator itself is left installed; only the extra grant is gone")
         step = 3
     elif spec.kind == "enterprise":
         job.step(1, 4, "Deleting databases")

@@ -118,6 +118,7 @@ class UninstallSpec(BaseModel):
     managed: bool = True          # False -> delete by name, not by our label
     delete_pvc: bool = False
     delete_namespace: bool = False
+    delete_operator_rbac: bool = False   # opstree: the shared ClusterRole
 
 
 class OperatorInstallSpec(BaseModel):

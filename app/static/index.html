@@ -1032,6 +1032,13 @@
       <div class="row">
         <label class="chk"><input type="checkbox" id="uNs"> Also delete the namespace</label>
       </div>
+      <div class="row hide" id="uRbacRow">
+        <label class="chk"><input type="checkbox" id="uRbac">
+          Also remove the operator RBAC supplement</label>
+        <span class="hint">The extra ClusterRole this app adds to work around the
+          Opstree CSV. It is cluster-scoped and shared, so it is kept automatically if
+          any other Opstree release still needs it. The operator itself stays installed.</span>
+      </div>
       <div id="uDanger"></div>
       <div class="row">
         <button class="danger" id="uGo">Uninstall</button>

@@ -850,9 +850,13 @@ $('mUse').onclick = () => {
 function selectRelease(r) {
   SELECTED = r;
   $('uTitle').textContent = `${r.namespace}/${r.name}`;
+  // the RBAC supplement only exists for Opstree
+  $('uRbacRow').classList.toggle('hide', r.kind !== 'opstree');
+  if (r.kind !== 'opstree') $('uRbac').checked = false;
 
   const rows = [
-    ['Type', r.kind === 'enterprise' ? 'Redis Enterprise' : 'Redis Community'],
+    ['Type', { enterprise: 'Redis Enterprise', opstree: 'Redis via Opstree operator',
+               community: 'Redis Community' }[r.kind] || r.kind],
     ['Version', r.version || '(unknown)'],
     ['Status', r.status],
     ['Pods', r.pods],
@@ -876,6 +880,7 @@ function renderPlan() {
   const r = SELECTED;
   if (!r) return;
   const pvc = $('uPvc').checked, ns = $('uNs').checked;
+  const rbac = $('uRbac').checked && r.kind === 'opstree';
 
   let steps;
   if (r.kind === 'opstree') {
@@ -911,7 +916,16 @@ function renderPlan() {
        <td class="${pvc ? 'err' : 'dim'}" style="width:70px">${pvc ? 'DELETE' : 'keep'}</td></tr>`).join('');
   }
   html += `<tr><td>Namespace</td><td class="mono" style="font-size:11.5px">${r.namespace}</td>
-    <td class="${ns ? 'err' : 'dim'}" style="width:70px">${ns ? 'DELETE' : 'keep'}</td></tr></table>`;
+    <td class="${ns ? 'err' : 'dim'}" style="width:70px">${ns ? 'DELETE' : 'keep'}</td></tr>`;
+  if (r.kind === 'opstree') {
+    html += `<tr><td>ClusterRole + Binding</td>
+      <td class="mono" style="font-size:11.5px">rediscover-opstree-rbac-supplement
+        &middot; <span class="dim">cluster-scoped, shared by every Opstree release</span></td>
+      <td class="${rbac ? 'err' : 'dim'}" style="width:70px">${rbac ? 'DELETE*' : 'keep'}</td></tr>`;
+  }
+  html += `</table>`;
+  if (rbac) html += `<div class="hint">* kept automatically if any other Opstree
+    release is still present &mdash; checked at uninstall time, not now.</div>`;
   $('uPlan').innerHTML = html;
 
   const destructive = r.pvcs.filter(p => p.reclaim === 'Delete');
@@ -936,6 +950,7 @@ function renderPlan() {
 
 $('uPvc').onchange = renderPlan;
 $('uNs').onchange = renderPlan;
+$('uRbac').onchange = renderPlan;
 $('uCancel').onclick = () => { $('uDetailCard').classList.add('hide'); SELECTED = null; };
 
 $('uGo').onclick = async () => {
@@ -961,6 +976,7 @@ $('uGo').onclick = async () => {
       cr_plural: r.cr_plural || null,
       workload: r.workload || 'deployment', managed: !!r.managed,
       delete_pvc: pvc, delete_namespace: ns,
+      delete_operator_rbac: $('uRbac').checked && r.kind === 'opstree',
     }),
   });
   // the selection is about to stop existing -- drop it now, not later

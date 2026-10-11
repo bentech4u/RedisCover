@@ -245,8 +245,11 @@ MISSING_RESOURCES = [
 ]
 
 
+RBAC_SUPPLEMENT_NAME = "rediscover-opstree-rbac-supplement"
+
+
 def rbac_supplement(sa_namespace: str, sa_name: str = "redis-operator") -> list[dict]:
-    name = "rediscover-opstree-rbac-supplement"
+    name = RBAC_SUPPLEMENT_NAME
     return [
         {
             "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
@@ -295,3 +298,30 @@ def operator_can_watch(kubeconfig: str, sa_namespace: str, resource: str,
         if (ocp.run(kubeconfig, args, check=False, timeout=45).stdout or "").strip() != "yes":
             return False
     return True
+
+
+def other_crs_exist(kubeconfig: str, exclude_ns: str = "", exclude_name: str = "",
+                    exclude_plural: str = "") -> list[str]:
+    """Opstree CRs still on the cluster, ignoring the one being uninstalled.
+
+    The RBAC supplement is cluster-scoped and shared by every Opstree release,
+    so removing it while another release exists breaks that release in exactly
+    the way it was added to prevent -- the controller keeps watching but can no
+    longer write status, and nothing says so.
+    """
+    # The plural is appended in Python, not interpolated into the jsonpath:
+    # bare literal text between {} segments makes the parser fail with
+    # "unterminated quoted string" and the helper returns an empty string,
+    # which would read as "no other releases" and silently delete the role.
+    expr = r'{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\n"}{end}'
+    found = []
+    for plural in ("redis", "redisreplications", "redissentinels", "redisclusters"):
+        out = ocp.jsonpath(kubeconfig, ["get", plural, "-A"], expr) or ""
+        for line in out.splitlines():
+            ns, _, nm = line.strip().partition("/")
+            if not ns or not nm:
+                continue
+            if ns == exclude_ns and nm == exclude_name and plural == exclude_plural:
+                continue
+            found.append(f"{ns}/{nm} ({plural})")
+    return found
