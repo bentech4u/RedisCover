@@ -221,6 +221,10 @@ class BenchSpec(BaseModel):
     pipeline: int = Field(default=1, ge=1, le=256)
     keyspace: int = Field(default=10000, ge=1, le=10000000)
 
+    # which Service to drive. "write" is the primary-only endpoint, "read" the
+    # one that load-balances across every pod, "both" runs each and compares.
+    endpoint: Literal["write", "read", "both"] = "write"
+
     include_writes: bool = False   # SET as well as GET -- touches live data
     per_pod: bool = True
     cleanup: bool = False

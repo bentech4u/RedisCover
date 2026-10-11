@@ -2645,7 +2645,7 @@ $('hDownload').onclick = () => {
 
 /* ------------------------------------------------ benchmark */
 
-let BCUR = null, BREPORT = '';
+let BCUR = null, BREPORT = '', BHTML = '';
 
 async function scanForBench() {
   $('bScanState').innerHTML = '<span class="spin"></span> scanning…';
@@ -2668,6 +2668,18 @@ async function scanForBench() {
         BCUR = rels[parseInt(rb.value)];
         $('bTitle').textContent = `${BCUR.namespace}/${BCUR.name}`;
         $('bConfigCard').classList.remove('hide');
+        // only a primary/replica split has two endpoints worth comparing
+        const split = BCUR.topology === 'replication';
+        $('bEndpoint').disabled = !split;
+        if (!split) $('bEndpoint').value = 'write';
+        $('bEndpointHint').innerHTML = split
+          ? `<span class="mono">write</span> targets the primary only;
+             <span class="mono">read</span> load-balances across all
+             ${BCUR.pods || ''} pods. Comparing them shows whether your replicas
+             are actually giving you read scaling.`
+          : BCUR.topology === 'cluster'
+            ? 'A cluster shards across primaries; there is no separate read endpoint.'
+            : 'Standalone has one endpoint.';
         benchWarn();
       };
     });
@@ -2727,6 +2739,7 @@ $('bRun').onclick = async () => {
       datasize: parseInt($('bDatasize').value) || 64,
       pipeline: parseInt($('bPipeline').value) || 1,
       keyspace: parseInt($('bKeyspace').value) || 10000,
+      endpoint: $('bEndpoint').value,
       include_writes: writes,
       per_pod: $('bPerPod').checked,
       cleanup: $('bCleanup').checked,
@@ -2737,21 +2750,34 @@ $('bRun').onclick = async () => {
   streamJob(j.job_id, (status, res) => {
     if (status === 'succeeded' && res && res.report) {
       BREPORT = res.report;
+      BHTML = res.report_html || '';
       $('bReport').textContent = BREPORT;
+      // srcdoc keeps the report self-contained; no server round trip, no origin
+      $('bHtml').srcdoc = BHTML;
       $('bReportCard').classList.remove('hide');
+      document.querySelector('.tab[data-tab="bench"]').click();
+      $('bReportCard').scrollIntoView({ behavior: 'smooth' });
     }
   });
 };
 
-$('bCopy').onclick = () => navigator.clipboard.writeText(BREPORT);
-$('bDownload').onclick = () => {
-  const blob = new Blob([BREPORT], { type: 'text/markdown' });
+$('bViewHtml').onclick = () => {
+  $('bHtml').classList.remove('hide'); $('bReport').classList.add('hide');
+};
+$('bViewMd').onclick = () => {
+  $('bHtml').classList.add('hide'); $('bReport').classList.remove('hide');
+};
+function bSave(text, ext, type) {
+  const blob = new Blob([text], { type });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `redis-bench-${BCUR ? BCUR.namespace + '-' + BCUR.name : 'result'}.md`;
+  a.download = `redis-bench-${BCUR ? BCUR.namespace + '-' + BCUR.name : 'result'}.${ext}`;
   a.click();
   URL.revokeObjectURL(a.href);
-};
+}
+$('bDownloadHtml').onclick = () => bSave(BHTML, 'html', 'text/html');
+$('bCopy').onclick = () => navigator.clipboard.writeText(BREPORT);
+$('bDownload').onclick = () => bSave(BREPORT, 'md', 'text/markdown');
 
 document.querySelector('.tab[data-tab="bench"]').addEventListener('click', () => {
   if (!BCUR) scanForBench();
