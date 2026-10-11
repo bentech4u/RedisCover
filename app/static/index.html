@@ -665,7 +665,8 @@
         <div class="hint" id="dQosHint" style="margin-top:10px"></div>
         <div class="actions">
           <button id="dMem">Apply</button>
-          <label class="chk" style="font-size:12px"><input type="checkbox" id="dMemForce"> force</label>
+          <label class="chk" style="font-size:12px" title="Only waives the safety check below">
+            <input type="checkbox" id="dMemForce"> ignore the 80% warning</label>
         </div>
       </div>
 
@@ -725,7 +726,8 @@
         </div>
         <div class="actions">
           <button id="dBump">Change</button>
-          <label class="chk" style="font-size:12px"><input type="checkbox" id="dForce"> force</label>
+          <label class="chk" style="font-size:12px" title="Only allows a downgrade">
+            <input type="checkbox" id="dForce"> allow a downgrade</label>
         </div>
       </div>
     </section>
