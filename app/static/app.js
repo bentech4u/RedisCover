@@ -1366,6 +1366,7 @@ function applyOtTopology() {
   $('otSize').oninput = applyOtSize;
   if (t.id === 'sentinel' && !$('otReplName').value)
     $('otReplName').value = $('otName').value + '-replication';
+  applyOtVersion();   // the resolved image depends on the topology
 }
 
 function applyOtSize() {
@@ -1381,8 +1382,35 @@ function applyOtSize() {
 
 function applyOtVersion() {
   const v = STATE.opstree.versions.find(x => x.id === $('otVersion').value);
-  $('otVersionHint').innerHTML = `<span class="mono">${v.image}</span>`;
+  const sentinel = $('otTopology').value === 'sentinel';
+  // Sentinel runs a different binary from a different repo. Show the image the
+  // deploy will actually use, not the one the version list names.
+  const resolved = sentinel
+    ? v.image.replace('/opstree/redis:', '/opstree/redis-sentinel:')
+    : v.image;
+  $('otVersionHint').innerHTML = `<span class="mono">${resolved}</span>`
+    + (sentinel ? '<br><span class="dim">Sentinel uses the redis-sentinel repo.</span>' : '');
+  applyOtCustomImage();
 }
+
+function applyOtCustomImage() {
+  const custom = $('otCustomImage').value.trim();
+  const sentinel = $('otTopology').value === 'sentinel';
+  let h = 'Use this for a mirrored or internal registry.';
+  if (custom && sentinel && !/redis-sentinel/.test(custom)) {
+    // the exact failure this substitution exists to prevent
+    h = `<span class="err">This looks like a plain Redis image, and a custom image
+      skips the automatic redis-sentinel substitution.</span> The plain image starts
+      redis-server on 6379 while the Service points at 26379, so every pod reports
+      healthy and nothing can connect. Use the <span class="mono">redis-sentinel</span>
+      image unless you are certain.`;
+  } else if (custom) {
+    h = `Overrides the version above. Deploying <span class="mono">${custom}</span>.`;
+  }
+  $('otCustomImageHint').innerHTML = h;
+}
+
+$('otCustomImage').oninput = applyOtCustomImage;
 
 $('otGenPw').onclick = async (e) => {
   e.preventDefault();
@@ -1395,6 +1423,7 @@ function opstreeSpec() {
     name: $('otName').value.trim(),
     topology: $('otTopology').value,
     version_id: $('otVersion').value,
+    custom_image: $('otCustomImage').value.trim() || null,
     size: parseInt($('otSize').value) || 3,
     password: $('otPassword').value || null,
     auth_enabled: true,

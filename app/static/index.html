@@ -247,6 +247,12 @@
           <label>Redis version</label><select id="otVersion"></select>
           <div class="hint" id="otVersionHint"></div>
         </div>
+        <div class="field">
+          <label>Custom image (optional &mdash; overrides the version)</label>
+          <input id="otCustomImage" placeholder="registry.example.com/opstree/redis:v8.2.9">
+          <div class="hint" id="otCustomImageHint">Use this for a mirrored or internal
+            registry.</div>
+        </div>
       </div>
 
       <div class="grid g3" style="margin-bottom:16px">

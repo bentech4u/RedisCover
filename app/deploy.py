@@ -783,7 +783,20 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
 
     job.log(f"Redis via the Opstree operator -- topology: {topo.get('label')}")
     job.log(f"  {topo.get('detail')}")
-    job.log(f"Namespace {spec.namespace} | name {spec.name} | image {ot.image_for(spec)}")
+    resolved_image = ot.image_for(spec)
+    job.log(f"Namespace {spec.namespace} | name {spec.name} | image {resolved_image}")
+    if (spec.topology == "sentinel" and spec.custom_image
+            and "redis-sentinel" not in spec.custom_image):
+        # A custom image bypasses the redis-sentinel substitution, and the plain
+        # image runs redis-server on 6379 while the Service targets 26379. Every
+        # pod reports Running and ready, and nothing can reach Sentinel.
+        job.log("")
+        job.log("  !! WARNING: a custom image overrides the automatic redis-sentinel")
+        job.log("  !! substitution, and this one does not look like a Sentinel image.")
+        job.log("  !! The plain Redis image starts redis-server on 6379 while the")
+        job.log("  !! Service points at 26379: the pods will look healthy and no")
+        job.log("  !! client or replica will be able to reach Sentinel.")
+        job.log("")
     if topo.get("client_aware"):
         job.log("")
         job.log(f"!! Clients must be {topo['client_aware']}. A plain redis-cli pointed at")
