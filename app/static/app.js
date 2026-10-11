@@ -1993,6 +1993,35 @@ function renderAnalysis(a) {
       <tr><td>Evicted keys</td><td class="mono ${a.evicted_keys ? 'warn' : ''}">${a.evicted_keys.toLocaleString()}</td>
           <td class="dim">${a.evicted_keys ? 'the working set does not fit' : 'nothing dropped'}</td></tr>
     </table>
+    ${(s.prefixes || []).length ? `
+      <h3 style="font-size:13px;margin:18px 0 8px">What is in the cache</h3>
+      <div class="hint" style="margin-bottom:8px">Sampled keys grouped by their first
+        namespace segment. Shares are of the <strong>sample</strong>, so a namespace
+        holding a small fraction of the keyspace may not appear at all &mdash;
+        ${s.n} keys out of ${a.keys.toLocaleString()} were examined.</div>
+      <table>
+        <tr><th>Namespace</th><th>Keys in sample</th><th>% of keys</th>
+            <th>% of memory</th><th>Avg bytes</th><th>With TTL</th><th>Example</th></tr>
+        ${s.prefixes.map(p => `<tr>
+          <td class="mono">${p.prefix}</td>
+          <td class="mono">${p.count}</td>
+          <td class="mono">${p.pct_keys}%</td>
+          <td class="mono"><strong>${p.pct_memory}%</strong></td>
+          <td class="mono">${p.avg_bytes.toLocaleString()}</td>
+          <td class="mono ${p.with_ttl_pct === 0 ? 'warn' : ''}">${p.with_ttl_pct}%</td>
+          <td class="mono dim" style="font-size:11px">${p.example}</td></tr>`).join('')}
+      </table>
+      ${s.prefixes.length && s.prefixes[0].pct_memory >= 80 ? `<div class="hint warn">
+        <span class="mono">${s.prefixes[0].prefix}</span> holds
+        ${s.prefixes[0].pct_memory}% of the sampled memory. If that is not what you
+        expect to dominate, something is writing more than you think.</div>` : ''}
+      ${s.prefixes.some(p => p.with_ttl_pct === 0) ? `<div class="hint warn">
+        Namespaces showing <span class="mono">0%</span> TTL never expire. Under
+        <span class="mono">${a.maxmemory_policy}</span> they
+        ${(a.maxmemory_policy || '').startsWith('volatile')
+          ? 'can never be evicted either, so the cache fills and writes start failing with OOM'
+          : 'stay until evicted, which means eviction order is decided by access, not by your intent'}.</div>` : ''}
+      ` : ''}
     ${(a.bigkeys || []).length ? `<h3 style="font-size:13px;margin:18px 0 8px">Largest keys</h3>
       <pre style="max-height:180px">${a.bigkeys.join('\n')}</pre>` : ''}
     ${(a.top_commands || []).length ? `<h3 style="font-size:13px;margin:18px 0 8px">Command profile</h3>

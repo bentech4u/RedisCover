@@ -36,7 +36,8 @@ for i = 1, n do
     elseif t == 'set' then vlen = redis.call('SCARD', k)
     elseif t == 'zset' then vlen = redis.call('ZCARD', k)
     end
-    out[#out+1] = string.format('%s|%d|%d|%d|%d', t, m or 0, ttl, #k, vlen)
+    -- the key NAME goes last so a key containing '|' cannot break the split
+    out[#out+1] = string.format('%s|%d|%d|%d|%d|%s', t, m or 0, ttl, #k, vlen, k)
   end
 end
 return out
@@ -49,6 +50,20 @@ def _cli(kubeconfig: str, ns: str, pod: str, pw: str, *args: str,
     p = ocp.run(kubeconfig, ["exec", "-n", ns, pod, "--", "redis-cli", *auth, *args],
                 check=False, timeout=timeout)
     return ((p.stdout or "") + (p.stderr or "")).strip()
+
+
+def _prefix(key: str) -> str:
+    """The namespace an application gave a key.
+
+    Convention is colon-separated (user:1234:profile), so the first segment is
+    the namespace. A trailing numeric segment is dropped too, because
+    cache:7:item and cache:8:item are one namespace, not two.
+    """
+    for sep in (":", "::", "."):
+        if sep in key:
+            head = key.split(sep)[0]
+            return (head or key)[:60]
+    return key[:60] if len(key) < 20 else key[:20] + "..."
 
 
 def _info(text: str) -> dict[str, str]:
@@ -111,11 +126,13 @@ def analyze(kubeconfig: str, ns: str, pod: str, password: str,
                timeout=180)
     rows = []
     for line in raw.splitlines():
-        parts = line.strip().split("|")
-        if len(parts) == 5:
+        # maxsplit=5: everything after the fifth bar is the key name, which may
+        # itself contain bars
+        parts = line.strip().split("|", 5)
+        if len(parts) == 6:
             try:
                 rows.append((parts[0], int(parts[1]), int(parts[2]),
-                             int(parts[3]), int(parts[4])))
+                             int(parts[3]), int(parts[4]), parts[5]))
             except ValueError:
                 pass
 
@@ -124,7 +141,20 @@ def analyze(kubeconfig: str, ns: str, pod: str, password: str,
     else:
         types: dict[str, int] = {}
         klens, mems, vlens, ttls = [], [], [], []
-        for t, mbytes, ttl, klen, vlen in rows:
+        prefixes: dict[str, dict] = {}
+        for t, mbytes, ttl, klen, vlen, kname in rows:
+            # Applications namespace keys with a separator; the first segment is
+            # the one that says WHAT the data is. A keyspace of one prefix is a
+            # single-purpose cache; many prefixes with one dominating is the
+            # usual shape, and worth seeing.
+            pfx = _prefix(kname)
+            e = prefixes.setdefault(pfx, {"count": 0, "bytes": 0, "with_ttl": 0,
+                                          "types": set(), "example": kname})
+            e["count"] += 1
+            e["bytes"] += mbytes
+            e["types"].add(t)
+            if ttl >= 0:
+                e["with_ttl"] += 1
             types[t] = types.get(t, 0) + 1
             klens.append(klen)
             mems.append(mbytes)
@@ -148,6 +178,19 @@ def analyze(kubeconfig: str, ns: str, pod: str, password: str,
             "p95_memory": sorted(mems)[int(n * 0.95)] if n > 20 else max(mems),
             "max_memory_in_sample": max(mems),
         }
+
+        total_bytes = sum(e["bytes"] for e in prefixes.values()) or 1
+        res["sample"]["prefixes"] = [
+            {"prefix": k,
+             "count": e["count"],
+             "pct_keys": round(100.0 * e["count"] / n, 1),
+             "pct_memory": round(100.0 * e["bytes"] / total_bytes, 1),
+             "avg_bytes": round(e["bytes"] / e["count"]),
+             "with_ttl_pct": round(100.0 * e["with_ttl"] / e["count"]),
+             "types": sorted(e["types"]),
+             "example": e["example"]}
+            for k, e in sorted(prefixes.items(), key=lambda x: -x[1]["bytes"])
+        ][:20]
         # for strings avg_value_size is bytes; for containers it is element count
         res["sizing_suggestion"] = {
             "keys": keys,
