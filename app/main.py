@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from . import deploy, discover as discovery, ocp, operators as ophub
 from . import analyze as keyspace
 from . import cli as rediscli
+from . import bench as benchmark
 from . import handover as handoverdoc
 from . import day2 as day2ops
 from . import inspect as inspector
@@ -49,7 +50,7 @@ from .manifests import (
     enterprise_redb,
     gen_password,
 )
-from .models import (CommunitySpec, EnterpriseSpec, LoginRequest,
+from .models import (BenchSpec, CommunitySpec, EnterpriseSpec, LoginRequest,
                      Day2Spec, OperatorInstallSpec, OpstreeSpec, TestRunSpec,
                      UninstallSpec)
 
@@ -471,6 +472,14 @@ def acl_users(namespace: str, name: str, sid: Optional[str] = Cookie(None)):
     from .catalog import ACL_PRESETS
     return {"users": day2ops.list_users(s["kubeconfig"], namespace, name),
             "presets": [{"id": k, **v} for k, v in ACL_PRESETS.items()]}
+
+
+@app.post("/api/bench/run")
+def run_bench(spec: BenchSpec, sid: Optional[str] = Cookie(None)):
+    s = _session(sid)
+    job = deploy.new_job("bench")
+    deploy.run_in_thread(job, benchmark.run, s["kubeconfig"], spec)
+    return {"job_id": job.id}
 
 
 @app.get("/api/handover")

@@ -200,7 +200,7 @@ document.querySelectorAll('.tab').forEach(t => {
   t.onclick = () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
-    ['deploy', 'cluster', 'sizing', 'day2', 'operators', 'tests', 'console', 'status', 'uninstall'].forEach(n => {
+    ['deploy', 'cluster', 'sizing', 'day2', 'operators', 'tests', 'console', 'status', 'bench', 'uninstall'].forEach(n => {
       $('tab' + n[0].toUpperCase() + n.slice(1)).classList.toggle('hide', n !== t.dataset.tab);
     });
   };
@@ -2642,3 +2642,117 @@ $('hDownload').onclick = () => {
   a.click();
   URL.revokeObjectURL(a.href);
 };
+
+/* ------------------------------------------------ benchmark */
+
+let BCUR = null, BREPORT = '';
+
+async function scanForBench() {
+  $('bScanState').innerHTML = '<span class="spin"></span> scanning…';
+  try {
+    const d = await api('/api/discover');
+    const rels = d.releases.filter(r => !r.deleting);
+    $('bScanState').textContent =
+      `${rels.length} release(s) · scanned ${new Date().toLocaleTimeString()}`;
+    $('bTable').innerHTML = rels.length
+      ? '<tr><th></th><th>Type</th><th>Namespace / name</th><th>Topology</th><th>Status</th></tr>' +
+        rels.map((r, i) => `<tr>
+          <td><input type="radio" name="brel" value="${i}" style="width:auto"></td>
+          <td>${r.kind}${r.cr_kind ? ' <span class="dim">/ ' + r.cr_kind + '</span>' : ''}</td>
+          <td class="mono">${r.namespace}/<strong>${r.name}</strong></td>
+          <td>${r.topology || '-'}</td>
+          <td class="${r.deleting ? 'err' : 'ok'}">${r.status}</td></tr>`).join('')
+      : '<tr><td class="dim">Nothing deployed.</td></tr>';
+    document.querySelectorAll('input[name=brel]').forEach(rb => {
+      rb.onchange = () => {
+        BCUR = rels[parseInt(rb.value)];
+        $('bTitle').textContent = `${BCUR.namespace}/${BCUR.name}`;
+        $('bConfigCard').classList.remove('hide');
+        benchWarn();
+      };
+    });
+  } catch (e) { $('bScanState').innerHTML = `<span class="err">${e.message}</span>`; }
+}
+
+function benchWarn() {
+  const w = $('bWrites').checked, c = $('bCleanup').checked;
+  const keyspace = parseInt($('bKeyspace').value) || 0;
+  const n = parseInt($('bRequests').value) || 0;
+  const d = parseInt($('bDatasize').value) || 0;
+  // rough upper bound: every distinct key written once, plus per-key overhead
+  const bytes = keyspace * (d + 64);
+  $('bEstimate').innerHTML = w
+    ? `Writes could add up to <strong>${(bytes / 1048576).toFixed(1)} MiB</strong>
+       across ${keyspace.toLocaleString()} keys.`
+    : `${n.toLocaleString()} reads, no data written.`;
+
+  let msg = '';
+  if (w) {
+    msg += `<div class="alert w"><strong>Writes touch the live keyspace.</strong>
+      redis-benchmark writes keys named <span class="mono">key:&lt;n&gt;</span>. On an
+      <span class="mono">allkeys-*</span> eviction policy, filling the cache evicts real
+      application data — the application will not error, it will just start missing.
+      ${c ? '' : 'Nothing will be cleaned up afterwards unless you tick the box below.'}</div>`;
+  }
+  if (c) {
+    msg += `<div class="alert w">Cleanup deletes every key matching
+      <span class="mono">key:*</span> on each primary. If your application uses that
+      prefix, <strong>its keys go too</strong>. The job prints the count before deleting.</div>`;
+  }
+  msg += `<div class="alert i">A benchmark competes with real traffic for the same
+    single Redis thread. Against production, run it small first.</div>`;
+  $('bWarn').innerHTML = msg;
+}
+
+['bWrites', 'bCleanup'].forEach(id => $(id).onchange = benchWarn);
+['bKeyspace', 'bRequests', 'bDatasize'].forEach(id => $(id).oninput = benchWarn);
+$('bCancel').onclick = () => { $('bConfigCard').classList.add('hide'); BCUR = null; };
+$('bScan').onclick = scanForBench;
+
+$('bRun').onclick = async () => {
+  if (!BCUR) return showError('Pick a release first.');
+  const writes = $('bWrites').checked;
+  if (writes && !confirm(
+      `Run a WRITE benchmark against ${BCUR.namespace}/${BCUR.name}?\n\n`
+      + `This inserts keys into the live keyspace and can evict real data `
+      + `under an allkeys eviction policy.`)) return;
+
+  const j = await api('/api/bench/run', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: BCUR.kind, namespace: BCUR.namespace, name: BCUR.name,
+      topology: BCUR.topology || null,
+      requests: parseInt($('bRequests').value) || 20000,
+      clients: parseInt($('bClients').value) || 20,
+      datasize: parseInt($('bDatasize').value) || 64,
+      pipeline: parseInt($('bPipeline').value) || 1,
+      keyspace: parseInt($('bKeyspace').value) || 10000,
+      include_writes: writes,
+      per_pod: $('bPerPod').checked,
+      cleanup: $('bCleanup').checked,
+    }),
+  });
+  document.querySelector('.tab[data-tab="deploy"]').click();
+  // streamJob calls back as (status, result)
+  streamJob(j.job_id, (status, res) => {
+    if (status === 'succeeded' && res && res.report) {
+      BREPORT = res.report;
+      $('bReport').textContent = BREPORT;
+      $('bReportCard').classList.remove('hide');
+    }
+  });
+};
+
+$('bCopy').onclick = () => navigator.clipboard.writeText(BREPORT);
+$('bDownload').onclick = () => {
+  const blob = new Blob([BREPORT], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `redis-bench-${BCUR ? BCUR.namespace + '-' + BCUR.name : 'result'}.md`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+document.querySelector('.tab[data-tab="bench"]').addEventListener('click', () => {
+  if (!BCUR) scanForBench();
+});

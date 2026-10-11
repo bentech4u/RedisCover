@@ -72,6 +72,7 @@
     <div class="tab" data-tab="tests">Test</div>
     <div class="tab" data-tab="console">Console</div>
     <div class="tab" data-tab="status">Status</div>
+    <div class="tab" data-tab="bench">Benchmark</div>
     <div class="tab" data-tab="uninstall">Uninstall</div>
   </div>
 
@@ -1002,6 +1003,82 @@
   </div>
 
   <!-- ---------- UNINSTALL ---------- -->
+  <!-- ---------- BENCHMARK ---------- -->
+  <div id="tabBench" class="hide">
+
+    <section class="card">
+      <h2>Benchmark</h2>
+      <div class="sub">
+        Throughput and latency through the Service, <strong>plus every pod measured on
+        its own</strong>, with memory and key distribution beside it. One aggregate
+        number averages a slow pod or a lopsided shard out of existence; these are the
+        figures that show them.
+      </div>
+      <div class="inline">
+        <button class="ghost" id="bScan">Find releases</button>
+        <span id="bScanState" class="dim"></span>
+      </div>
+      <table id="bTable"></table>
+    </section>
+
+    <section class="card hide" id="bConfigCard">
+      <h2>Load for <span class="mono" id="bTitle"></span></h2>
+
+      <div class="grid g3">
+        <div class="field"><label>Requests</label>
+          <input id="bRequests" type="number" value="20000" min="1000" max="2000000">
+          <div class="hint">Total operations per test.</div></div>
+        <div class="field"><label>Parallel clients</label>
+          <input id="bClients" type="number" value="20" min="1" max="500">
+          <div class="hint">Concurrent connections.</div></div>
+        <div class="field"><label>Value size (bytes)</label>
+          <input id="bDatasize" type="number" value="64" min="1" max="1048576">
+          <div class="hint">Use something near your real values.</div></div>
+      </div>
+
+      <div class="grid g3">
+        <div class="field"><label>Pipeline depth</label>
+          <input id="bPipeline" type="number" value="1" min="1" max="256">
+          <div class="hint">1 measures round-trip time. Raise it to find Redis's own
+            ceiling, since the network dominates otherwise.</div></div>
+        <div class="field"><label>Keyspace</label>
+          <input id="bKeyspace" type="number" value="10000" min="1" max="10000000">
+          <div class="hint">Distinct keys touched. Matters for shard spread.</div></div>
+        <div class="field"><label>&nbsp;</label>
+          <div class="hint" id="bEstimate"></div></div>
+      </div>
+
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="bPerPod" checked>
+          Measure each pod separately</label>
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="bWrites">
+          Include writes (SET as well as GET)</label>
+      </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="bCleanup">
+          Delete benchmark keys afterwards</label>
+      </div>
+      <div id="bWarn"></div>
+
+      <div class="actions">
+        <button id="bRun">Run benchmark</button>
+        <button class="ghost" id="bCancel">Cancel</button>
+      </div>
+    </section>
+
+    <section class="card hide" id="bReportCard">
+      <h2>Result</h2>
+      <div class="row">
+        <button class="ghost" id="bCopy" style="padding:6px 12px">Copy</button>
+        <button class="ghost" id="bDownload" style="padding:6px 12px">Download .md</button>
+      </div>
+      <pre id="bReport" style="margin-top:14px;max-height:560px;overflow:auto"></pre>
+    </section>
+
+  </div>
+
   <div id="tabUninstall" class="hide">
     <section class="card">
       <h2>Installed releases</h2>

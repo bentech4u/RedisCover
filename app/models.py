@@ -207,3 +207,20 @@ class Day2Spec(BaseModel):
     acl_action: Optional[Literal["create", "delete", "password"]] = None
     user: Optional[RedisUser] = None
     force: bool = False
+
+
+class BenchSpec(BaseModel):
+    kind: Literal["community", "opstree", "enterprise"] = "community"
+    namespace: str
+    name: str
+    topology: Optional[str] = None
+
+    requests: int = Field(default=20000, ge=1000, le=2000000)
+    clients: int = Field(default=20, ge=1, le=500)
+    datasize: int = Field(default=64, ge=1, le=1048576)   # bytes per value
+    pipeline: int = Field(default=1, ge=1, le=256)
+    keyspace: int = Field(default=10000, ge=1, le=10000000)
+
+    include_writes: bool = False   # SET as well as GET -- touches live data
+    per_pod: bool = True
+    cleanup: bool = False
