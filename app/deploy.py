@@ -837,15 +837,20 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
     plural = {"Redis": "redis", "RedisReplication": "redisreplications",
               "RedisSentinel": "redissentinels", "RedisCluster": "redisclusters"}[topo["kind"]]
     if not ot.operator_can_watch(kubeconfig, spec.operator_namespace, plural):
-        job.log(f"  the operator's ServiceAccount CANNOT list {plural}")
-        job.log("  This is a packaging bug in the community bundle: its CSV grants RBAC")
-        job.log("  for only two of the four controllers it ships. controller-runtime aborts")
-        job.log("  the whole manager when any cache fails to sync, so the operator")
-        job.log("  crash-loops and no topology works.")
+        job.log(f"  the operator's ServiceAccount cannot fully drive {plural}")
+        job.log("  This is a packaging bug in the community bundle, and it takes two")
+        job.log("  forms. For redisreplications and redissentinels the CSV omits the")
+        job.log("  RBAC entirely, and controller-runtime aborts the whole manager when")
+        job.log("  a cache fails to sync. For redisclusters the CSV grants the resource")
+        job.log("  but spells its subresources singular -- 'rediscluster/status' where")
+        job.log("  the API has 'redisclusters' -- so the rule matches nothing, the")
+        job.log("  controller cannot write status, and it gives up before creating a")
+        job.log("  single StatefulSet while retrying quietly on a backoff.")
         if not spec.fix_operator_rbac:
             raise RuntimeError(
-                f"The operator cannot watch {plural}: its CSV is missing the RBAC. "
-                "Enable 'repair operator RBAC' or grant it manually.")
+                f"The operator cannot write {plural} status: its CSV is missing or "
+                "misspells the RBAC. Enable 'repair operator RBAC' or grant it "
+                "manually.")
         job.log("")
         job.log("  applying a supplementary ClusterRole for the missing resources")
         apply_manifests(job, kubeconfig,
@@ -857,14 +862,15 @@ def deploy_opstree(job: Job, kubeconfig: str, spec: OpstreeSpec) -> None:
                 break
             time.sleep(5)
         else:
-            raise RuntimeError(f"RBAC applied but the SA still cannot list {plural}")
-        job.log(f"  the SA can now list {plural}")
+            raise RuntimeError(
+                f"RBAC applied but the SA still cannot write {plural} status")
+        job.log(f"  the SA can now list and write status for {plural}")
         job.log("  restarting the operator so it picks up the new permissions")
         ocp.run(kubeconfig, ["rollout", "restart", "deployment/redis-operator",
                              "-n", spec.operator_namespace],
                 check=False, timeout=90, log=job.log)
     else:
-        job.log(f"  the operator can watch {plural}")
+        job.log(f"  the operator can watch and write status for {plural}")
 
     job.log("  waiting for the operator deployment to report available")
     try:
