@@ -12,6 +12,7 @@ fact about your keyspace, not something you can tune away with more clients.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Optional
 
 from . import catalog, manifests, ocp, redistests
@@ -74,6 +75,44 @@ def _reachable(kubeconfig: str, ns: str, from_pod: str, host: str, port: int,
                              "PING"], check=False, timeout=30)
     out = ((p.stdout or "") + (p.stderr or "")).strip()
     return ("PONG" in out.upper()), out
+
+
+HELPER_PREFIX = "rediscover-bench-"
+
+
+def _sweep_stale(job, kubeconfig: str, ns: str) -> None:
+    """Remove helper pods and policies a previous run could not clean up.
+
+    The run deletes both in a finally block, but a finally cannot run if the
+    app is killed mid-benchmark. The leftovers are harmless except that the
+    policy keeps a door open, so each run clears anything older than an hour
+    before opening its own. Only this prefix is touched; the Test tab's client
+    pods are named differently and are left alone.
+    """
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for kind in ("pod", "networkpolicy"):
+        raw = ocp.jsonpath(
+            kubeconfig, ["get", kind, "-n", ns],
+            '{range .items[*]}{.metadata.name}{" "}{.metadata.creationTimestamp}'
+            + chr(10) + '{end}') or ""
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) != 2 or not parts[0].startswith(HELPER_PREFIX):
+                continue
+            try:
+                age = (now - datetime.datetime.fromisoformat(
+                    parts[1].replace("Z", "+00:00"))).total_seconds()
+            except ValueError:
+                continue
+            if age < 3600:
+                continue
+            job.log(f"  removing stale {kind} {parts[0]} ({age / 3600:.1f}h old)")
+            ocp.run(kubeconfig, ["delete", kind, parts[0], "-n", ns,
+                                 "--ignore-not-found", "--grace-period=0", "--force"]
+                    if kind == "pod" else
+                    ["delete", kind, parts[0], "-n", ns, "--ignore-not-found"],
+                    check=False, timeout=60)
 
 
 def _has_benchmark(kubeconfig: str, ns: str, pod: str) -> bool:
@@ -322,7 +361,11 @@ def run(job, kubeconfig: str, spec) -> None:
         job.log("  this image has no redis-benchmark (the Opstree image ships")
         job.log("  redis-server and redis-cli only), so the load comes from a helper pod")
     if image:
+        _sweep_stale(job, kubeconfig, ns)
         helper = redistests.Client(kubeconfig, ns, job.log, image=image)
+        # one prefix for everything this run creates, so a sweep after a crash
+        # can tell our leftovers from the Test tab's client pods
+        helper.pod = f"{HELPER_PREFIX}{int(time.time()) % 100000}"
         helper.start()
         runner_pod = helper.pod
         if not _has_benchmark(kubeconfig, ns, runner_pod):
@@ -334,7 +377,7 @@ def run(job, kubeconfig: str, spec) -> None:
 
         if ocp.run(kubeconfig, ["get", "networkpolicy", "-n", ns],
                    check=False, timeout=30).stdout.strip():
-            netpol = f"rediscover-bench-{runner_pod}"
+            netpol = f"{runner_pod}-np"
             job.log("  a NetworkPolicy guards this namespace and the helper matches")
             job.log("  none of its allowed peers, so opening it a temporary door")
             ocp.apply_yaml(kubeconfig, _yaml(
