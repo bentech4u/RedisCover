@@ -17,6 +17,16 @@ from typing import Any
 from . import ocp
 
 OPSTREE_GROUP = "redis.redis.opstreelabs.in"
+# Which pod `role` label each topology produces. Opstree labels a cluster's
+# pods leader/follower, a replication's "replication", a sentinel's "sentinel",
+# and leaves a standalone without the label at all.
+ROLE_FOR_TOPOLOGY = {
+    "sentinel": {"sentinel"},
+    "replication": {"replication"},
+    "cluster": {"leader", "follower"},
+    "standalone": {None},
+}
+
 OPSTREE_KINDS = {                      # CRD plural -> (kind, topology)
     "redis": ("Redis", "standalone"),
     "redisreplications": ("RedisReplication", "replication"),
@@ -151,11 +161,22 @@ def discover(kubeconfig: str) -> dict[str, Any]:
             enterprise_ns.add(ns)      # keep the community scan out of here
             size = spec.get("clusterSize") or 1
             expected = size * 2 if topo == "cluster" else size
-            pods = [p for p in _json(kubeconfig, ["get", "pods", "-n", ns], 60)
-                    .get("items", [])
-                    if (p["metadata"].get("labels") or {}).get("role")
-                    == ("sentinel" if topo == "sentinel" else
-                        "replication" if topo == "replication" else None)]
+            # The role label disambiguates CRs sharing a namespace -- a
+            # RedisReplication and a RedisSentinel may carry the SAME name, so
+            # counting every pod in the namespace would double-count both.
+            # A cluster splits its pods across two roles, and treating that as
+            # "no role" is why a healthy 6-pod cluster reported "no pods".
+            want = ROLE_FOR_TOPOLOGY.get(topo, {None})
+            pods = []
+            for p in _json(kubeconfig, ["get", "pods", "-n", ns], 60).get("items", []):
+                lab = p["metadata"].get("labels") or {}
+                if lab.get("role") not in want:
+                    continue
+                # Opstree stamps app=<cr name>; when it is present it keeps two
+                # same-topology CRs in one namespace apart.
+                if lab.get("app") not in (None, md["name"]):
+                    continue
+                pods.append(p)
             ready = sum(1 for p in pods
                         if all(c.get("ready") for c in
                                (p.get("status", {}).get("containerStatuses") or [])))
