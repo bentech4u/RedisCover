@@ -85,6 +85,78 @@ def scale(job, kubeconfig: str, spec: Day2Spec) -> None:
 
 # ---------------------------------------------------------------- storage
 
+def _sync_opstree_storage(job, kubeconfig: str, ns: str, spec) -> bool:
+    """Grow an operator-managed release's claim templates.
+
+    Three places hold the size and all three must agree, which is why growing
+    the PVCs alone is not enough:
+
+      the PVCs            what exists today, already patched above
+      the custom resource what the operator builds new StatefulSets from
+      the StatefulSets    what new PODS are stamped from -- and immutable
+
+    Patching the CR is not sufficient on its own: the operator reads the new
+    size, tries to apply it to the existing StatefulSet, cannot (the field is
+    immutable) and moves on WITHOUT logging an error. The CR and the
+    StatefulSet then disagree silently, and the next replica is created at the
+    old size.
+
+    Deleting each StatefulSet with --cascade=orphan leaves the pods running
+    and lets the operator rebuild the controller from the CR, which is the one
+    path where the operator does set the template. Verified on a live cluster:
+    the pods kept their age through it.
+    """
+    plural = spec.cr_plural or "redisclusters"
+    size = spec.storage_size
+    cur = ocp.jsonpath(kubeconfig, ["get", plural, spec.name, "-n", ns],
+                       "{.spec.storage.volumeClaimTemplate.spec.resources"
+                       ".requests.storage}")
+    if cur == size:
+        job.log(f"  the custom resource already asks for {size}")
+    else:
+        job.log(f"  custom resource {cur or '?'} -> {size}")
+        import json as _j
+        patch = _j.dumps({"spec": {"storage": {"volumeClaimTemplate": {"spec": {
+            "resources": {"requests": {"storage": size}}}}}}})
+        ocp.run(kubeconfig, ["patch", plural, spec.name, "-n", ns, "--type",
+                             "merge", "-p", patch], log=job.log, timeout=90)
+
+    raw = ocp.jsonpath(
+        kubeconfig, ["get", "statefulset", "-n", ns, "-l", f"app={spec.name}"],
+        '{range .items[*]}{.metadata.name}{" "}'
+        '{.spec.volumeClaimTemplates[0].spec.resources.requests.storage}{"\n"}{end}')
+    stale = []
+    for line in (raw or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] != size:
+            stale.append(parts[0])
+    if not stale:
+        job.log("  every StatefulSet template already matches")
+        return False
+
+    for sts in stale:
+        job.log(f"  {sts}: deleting with --cascade=orphan so the operator rebuilds it")
+        job.log("    (the pods keep running and are re-adopted)")
+        ocp.run(kubeconfig, ["delete", "statefulset", sts, "-n", ns,
+                             "--cascade=orphan"], log=job.log, timeout=120)
+    deadline = time.time() + 240
+    while time.time() < deadline:
+        raw = ocp.jsonpath(
+            kubeconfig, ["get", "statefulset", "-n", ns, "-l", f"app={spec.name}"],
+            '{range .items[*]}'
+            '{.spec.volumeClaimTemplates[0].spec.resources.requests.storage}{" "}{end}')
+        vals = [v for v in (raw or "").split() if v]
+        if len(vals) >= len(stale) and all(v == size for v in vals):
+            job.log(f"  the operator rebuilt {len(vals)} StatefulSet(s) at {size}")
+            return True
+        time.sleep(5)
+    raise RuntimeError(
+        "the StatefulSet(s) were deleted with --cascade=orphan but the operator has "
+        "not rebuilt them at the new size. The pods are still running and the PVCs "
+        "are already grown, but new replicas would be created at the old size. Check "
+        "the operator log.")
+
+
 def _sync_claim_template(job, kubeconfig: str, ns: str, sts: str, size: str) -> bool:
     """Make a StatefulSet's volumeClaimTemplates match the PVCs we just grew.
 
@@ -236,8 +308,10 @@ def grow_storage(job, kubeconfig: str, spec: Day2Spec) -> None:
     job.log("  and the API forbids patching it. Left alone, the next replica you add")
     job.log("  would silently get the OLD size. Rebuilding the controller fixes that.")
     synced = False
-    if ocp.run(kubeconfig, ["get", "statefulset", spec.name, "-n", ns],
-               check=False, timeout=30).returncode == 0:
+    if spec.kind == "opstree":
+        synced = _sync_opstree_storage(job, kubeconfig, ns, spec)
+    elif ocp.run(kubeconfig, ["get", "statefulset", spec.name, "-n", ns],
+                 check=False, timeout=30).returncode == 0:
         synced = _sync_claim_template(job, kubeconfig, ns, spec.name, spec.storage_size)
     else:
         job.log(f"  '{spec.name}' is not a StatefulSet -- no template to reconcile")
