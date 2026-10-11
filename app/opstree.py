@@ -227,9 +227,21 @@ def crd_fields(kubeconfig: str, kind: str) -> dict[str, Any]:
 # core `events` are missing. controller-runtime aborts the whole manager when
 # any controller's cache fails to sync, so the operator crash-loops and NO
 # topology works. This supplements the missing rules.
+# What the Opstree CSV fails to grant its own ServiceAccount. Two separate
+# faults, both of which stop the controller dead rather than degrading it:
+#
+#   * redisreplications and redissentinels are absent entirely.
+#   * redisclusters IS granted, but its subresources are spelled SINGULAR in
+#     the CSV -- "rediscluster/status" and "rediscluster/finalizers". RBAC
+#     matches on the plural resource name, so those rules match nothing and
+#     the cluster controller cannot write its own status. It aborts at
+#     rediscluster_controller.go:99, before creating any StatefulSet, and
+#     retries forever on an exponential backoff while the namespace stays
+#     empty.
 MISSING_RESOURCES = [
     "redisreplications", "redisreplications/status", "redisreplications/finalizers",
     "redissentinels", "redissentinels/status", "redissentinels/finalizers",
+    "redisclusters", "redisclusters/status", "redisclusters/finalizers",
 ]
 
 
@@ -260,9 +272,26 @@ def rbac_supplement(sa_namespace: str, sa_name: str = "redis-operator") -> list[
 
 
 def operator_can_watch(kubeconfig: str, sa_namespace: str, resource: str,
-                       sa_name: str = "redis-operator") -> bool:
+                       sa_name: str = "redis-operator",
+                       namespace: str = "") -> bool:
+    """Can the operator actually drive this resource, not merely see it.
+
+    Checking `list` alone is what let a broken install look healthy: the CSV
+    grants list on redisclusters while misspelling the status subresource, so
+    the operator watches the CR, starts reconciling, and then cannot write
+    status. Nothing is ever created.
+
+    The subresource must be passed with --subresource. Writing it as
+    "redisclusters/status.<group>" parses as a resource name and the API
+    answers `yes` to a question nobody asked.
+    """
     sa = f"system:serviceaccount:{sa_namespace}:{sa_name}"
-    p = ocp.run(kubeconfig,
-                ["auth", "can-i", "list", f"{resource}.{OPSTREE_GROUP}",
-                 "--as", sa, "-A"], check=False, timeout=45)
-    return (p.stdout or "").strip() == "yes"
+    scope = ["-n", namespace] if namespace else ["-A"]
+    for verb, sub in (("list", None), ("update", "status")):
+        args = ["auth", "can-i", verb, f"{resource}.{OPSTREE_GROUP}"]
+        if sub:
+            args.append(f"--subresource={sub}")
+        args += ["--as", sa, *scope]
+        if (ocp.run(kubeconfig, args, check=False, timeout=45).stdout or "").strip() != "yes":
+            return False
+    return True
