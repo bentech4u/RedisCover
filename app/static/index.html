@@ -1031,7 +1031,10 @@
           <div class="hint">Total operations per test.</div></div>
         <div class="field"><label>Parallel clients</label>
           <input id="bClients" type="number" value="20" min="1" max="500">
-          <div class="hint">Concurrent connections.</div></div>
+          <div class="hint">Concurrent connections. Capped by <span class="mono">ulimit
+            -n</span> in the pod generating the load &mdash; usually 1024, so about 990
+            is the practical maximum. Past saturation more clients add queueing, not
+            throughput: raise the pipeline depth instead.</div></div>
         <div class="field"><label>Value size (bytes)</label>
           <input id="bDatasize" type="number" value="64" min="1" max="1048576">
           <div class="hint">Use something near your real values.</div></div>

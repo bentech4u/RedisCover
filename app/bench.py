@@ -115,6 +115,23 @@ def _sweep_stale(job, kubeconfig: str, ns: str) -> None:
                     check=False, timeout=60)
 
 
+def _fd_limit(kubeconfig: str, ns: str, pod: str) -> int:
+    """Open-file limit in the pod that will generate the load.
+
+    redis-benchmark needs one socket per client. The ceiling is not Redis's
+    maxclients -- that governs the server -- it is `ulimit -n` wherever the
+    benchmark runs, which on a stock container image is 1024. Ask for more
+    clients than that and every run dies with "Can't create socket: No file
+    descriptors available", after the pods have already been measured.
+    """
+    out = ocp.run(kubeconfig, ["exec", "-n", ns, pod, "--", "sh", "-c", "ulimit -n"],
+                  check=False, timeout=30).stdout.strip()
+    try:
+        return int(out)
+    except ValueError:
+        return 0
+
+
 def _has_benchmark(kubeconfig: str, ns: str, pod: str) -> bool:
     return ocp.run(kubeconfig, ["exec", "-n", ns, pod, "--", "which", "redis-benchmark"],
                    check=False, timeout=30).returncode == 0
@@ -304,9 +321,19 @@ def _fill(job, kubeconfig: str, ns: str, runner_pod: str, host: str, port: int,
             batch = max(1000, min(5_000_000, int(remaining / per_key * 0.92)))
             job.log(f"  round {rnd}: {_human(remaining)} to go, "
                     f"~{per_key:.0f} B/key -> {batch:,} writes")
-        _bench(job, kubeconfig, ns, runner_pod, host, port, bench_auth, "set",
-               _FillSpec(batch, spec.fill_value_bytes, keyspace, spec.clients),
-               cluster, f"fill round {rnd}")
+        rows = _bench(job, kubeconfig, ns, runner_pod, host, port, bench_auth,
+                      "set",
+                      _FillSpec(batch, spec.fill_value_bytes, keyspace,
+                                spec.clients),
+                      cluster, f"fill round {rnd}")
+        if not rows:
+            # No output means the benchmark could not run at all. Reading that
+            # as "memory did not grow, so we must be evicting" is a diagnosis
+            # of the wrong thing entirely -- say what actually happened.
+            raise RuntimeError(
+                f"the fill could not run: redis-benchmark produced no output in "
+                f"round {rnd}. The cache was not filled and nothing below was "
+                f"measured. See the error above -- it is the cause, not eviction.")
 
         after_used = int(_info(kubeconfig, ns, primary, auth, "memory")
                          .get("used_memory", 0) or 0)
@@ -318,8 +345,15 @@ def _fill(job, kubeconfig: str, ns: str, runner_pod: str, host: str, port: int,
         job.log(f"    +{made:,} keys, +{_human(max(grew, 0))} "
                 f"({per_key:.0f} B/key) -> {100.0 * after_used / maxm:.1f}% full")
         if grew <= 0:
-            job.log("    memory stopped growing: the cache is evicting as fast as")
-            job.log("    it is being written. That IS the ceiling; stopping here.")
+            # only a real conclusion when writes actually landed
+            if made > 0:
+                job.log("    keys were written but memory did not grow: the cache")
+                job.log("    is evicting as fast as it is filled. That IS the")
+                job.log("    ceiling for this value size; stopping here.")
+            else:
+                job.log("    no keys were created and memory did not grow. The")
+                job.log("    writes are not reaching Redis; stopping rather than")
+                job.log("    looping.")
             break
         if after_used >= target:
             break
@@ -482,6 +516,24 @@ def run(job, kubeconfig: str, spec) -> None:
             ocp.apply_yaml(kubeconfig, _yaml(
                 _bench_netpol(ns, netpol, "run", runner_pod, [t.port, 16379])),
                 log=job.log)
+
+    # Check this BEFORE anything else runs: the failure is deterministic, and
+    # discovering it one benchmark at a time wastes the whole run.
+    fds = _fd_limit(kubeconfig, ns, runner_pod)
+    if fds:
+        usable = max(1, fds - 32)       # leave room for stdio, the cluster bus, DNS
+        job.log(f"  {runner_pod} allows {fds} open files "
+                f"-> at most ~{usable} parallel clients")
+        if spec.clients > usable:
+            raise RuntimeError(
+                f"{spec.clients} parallel clients cannot work: redis-benchmark "
+                f"opens one socket per client and {runner_pod} has a file "
+                f"descriptor limit of {fds} (`ulimit -n`). Use {usable} or fewer. "
+                f"This is a limit on the pod generating the load, not on Redis -- "
+                f"the server itself reports maxclients far higher. More clients "
+                f"would not raise throughput anyway: Redis is single-threaded, so "
+                f"past saturation they add queueing, not capacity. Raise the "
+                f"pipeline depth instead.")
 
     ok, why = _reachable(kubeconfig, ns, runner_pod, bench_host, t.port, auth)
     if not ok:
